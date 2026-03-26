@@ -92,3 +92,16 @@ export async function uploadFile(formData: FormData) {
 
   return res.json() as Promise<import("./types").UploadResponse>;
 }
+
+export async function uploadText(body: {
+  ko_text: string;
+  book: string;
+  chapter: number;
+  chapter_zh?: string;
+  script: string;
+}) {
+  return fetchApi<import("./types").UploadResponse>("/api/upload/text", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

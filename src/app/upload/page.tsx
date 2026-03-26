@@ -4,14 +4,70 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Upload, FileText, CheckCircle, AlertCircle, X, Loader2,
   Plus, BookOpen, Hash, Database, Check, ChevronDown, ChevronRight, Eye, Type,
+  ClipboardPaste, Save,
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
-import { uploadFile, getDatasets } from "@/lib/api";
+import { uploadFile, uploadText, getDatasets } from "@/lib/api";
 import type { GlossaryTerm, UploadResponse, DatasetEntry } from "@/lib/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 
+// ──────────────────────────────────────────────
+// Shared metadata fields component
+// ──────────────────────────────────────────────
+function MetadataFields({
+  bookName, setBookName, chapter, setChapter,
+  chapterZh, setChapterZh, script, setScript,
+}: {
+  bookName: string; setBookName: (v: string) => void;
+  chapter: string; setChapter: (v: string) => void;
+  chapterZh: string; setChapterZh: (v: string) => void;
+  script: "unknown" | "simplified" | "traditional"; setScript: (v: "unknown" | "simplified" | "traditional") => void;
+}) {
+  const { t } = useLanguage();
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><BookOpen className="w-4 h-4 text-indigo-400" />{t("upload.bookName")}</label>
+          <input type="text" placeholder={t("upload.bookNamePlaceholder")} value={bookName} onChange={(e) => setBookName(e.target.value)}
+            className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
+        </div>
+        <div>
+          <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Hash className="w-4 h-4 text-indigo-400" />{t("upload.chapter")}</label>
+          <input type="text" placeholder={t("upload.chapterPlaceholder")} value={chapter} onChange={(e) => setChapter(e.target.value)}
+            className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Hash className="w-4 h-4 text-emerald-400" />{t("upload.chapterZh")}</label>
+          <input type="text" placeholder={t("upload.chapterZhPlaceholder")} value={chapterZh} onChange={(e) => setChapterZh(e.target.value)}
+            className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
+        </div>
+        <div>
+          <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Type className="w-4 h-4 text-emerald-400" />{t("upload.script")}</label>
+          <div className="relative">
+            <select value={script} onChange={(e) => setScript(e.target.value as "unknown" | "simplified" | "traditional")}
+              className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm appearance-none focus:outline-none focus:border-indigo-500/50 cursor-pointer">
+              <option value="unknown">{t("upload.scriptUnknown")}</option>
+              <option value="simplified">{t("upload.scriptSimplified")}</option>
+              <option value="traditional">{t("upload.scriptTraditional")}</option>
+            </select>
+            <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Main page
+// ──────────────────────────────────────────────
 export default function UploadPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const [activeTab, setActiveTab] = useState<"file" | "text">("file");
+
+  // shared
   const [bookName, setBookName] = useState("");
   const [chapter, setChapter] = useState("");
   const [chapterZh, setChapterZh] = useState("");
@@ -19,6 +75,14 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // file tab
+  const [file, setFile] = useState<File | null>(null);
+
+  // text tab
+  const [koText, setKoText] = useState("");
+
+  // datasets
   const [datasets, setDatasets] = useState<DatasetEntry[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(true);
   const [collapsedBooks, setCollapsedBooks] = useState<Set<string>>(new Set());
@@ -40,7 +104,7 @@ export default function UploadPage() {
     accept: { "text/plain": [".txt"], "text/markdown": [".md"], "text/csv": [".csv"], "application/json": [".json"] },
   });
 
-  const handleUpload = async () => {
+  const handleFileUpload = async () => {
     if (!file || !bookName.trim() || !chapter.trim()) return;
     setUploading(true); setError(null); setResult(null);
     try {
@@ -53,7 +117,25 @@ export default function UploadPage() {
     } catch (e) { setError(e instanceof Error ? e.message : t("upload.uploadError")); } finally { setUploading(false); }
   };
 
-  const handleReset = () => { setFile(null); setBookName(""); setChapter(""); setChapterZh(""); setScript("unknown"); setResult(null); setError(null); };
+  const handleTextSave = async () => {
+    if (!koText.trim() || !bookName.trim() || !chapter.trim()) return;
+    setUploading(true); setError(null); setResult(null);
+    try {
+      const res = await uploadText({
+        ko_text: koText.trim(),
+        book: bookName.trim(),
+        chapter: parseInt(chapter, 10) || 0,
+        chapter_zh: chapterZh.trim() || undefined,
+        script,
+      });
+      setResult(res); loadDatasets();
+    } catch (e) { setError(e instanceof Error ? e.message : t("upload.uploadError")); } finally { setUploading(false); }
+  };
+
+  const handleReset = () => {
+    setFile(null); setKoText(""); setBookName(""); setChapter("");
+    setChapterZh(""); setScript("unknown"); setResult(null); setError(null);
+  };
 
   const groupedDatasets = datasets.reduce<Record<string, DatasetEntry[]>>((acc, entry) => {
     if (!acc[entry.book]) acc[entry.book] = []; acc[entry.book].push(entry); return acc;
@@ -65,8 +147,10 @@ export default function UploadPage() {
   }));
 
   const toggleBookCollapse = (book: string) => setCollapsedBooks((prev) => { const next = new Set(prev); if (next.has(book)) next.delete(book); else next.add(book); return next; });
-
   const dateLocale = locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR";
+
+  const fileReady = !!file && !!bookName.trim() && !!chapter.trim();
+  const textReady = !!koText.trim() && !!bookName.trim() && !!chapter.trim();
 
   return (
     <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
@@ -78,66 +162,86 @@ export default function UploadPage() {
         <p className="text-slate-400 mt-1">{t("upload.subtitle")}</p>
       </div>
 
-      <div className="glass-card p-8 space-y-6">
-        <div {...getRootProps()} className={`relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-300 ${isDragActive ? "dropzone-active" : file ? "border-emerald-500/30 bg-emerald-500/5" : "border-surface-border hover:border-indigo-500/30 hover:bg-indigo-500/5"}`}>
-          <input {...getInputProps()} />
-          {file ? (
-            <div className="flex flex-col items-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4"><FileText className="w-8 h-8 text-emerald-400" /></div>
-              <p className="text-white font-semibold">{file.name}</p>
-              <p className="text-slate-500 text-sm mt-1">{(file.size / 1024).toFixed(1)} KB</p>
-              <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="mt-3 text-xs text-slate-500 hover:text-red-400 transition-colors flex items-center gap-1"><X className="w-3 h-3" />{t("upload.remove")}</button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center">
-              <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-4 transition-all duration-300 ${isDragActive ? "bg-indigo-500/20 scale-110" : "bg-surface-lighter"}`}>
-                <Upload className={`w-10 h-10 transition-colors duration-300 ${isDragActive ? "text-indigo-400" : "text-slate-600"}`} />
+      {/* ───── Tab Card ───── */}
+      <div className="glass-card overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex border-b border-surface-border">
+          <button onClick={() => setActiveTab("file")}
+            className={`flex-1 flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-medium transition-all duration-200 relative
+              ${activeTab === "file" ? "text-white" : "text-slate-500 hover:text-slate-300"}`}>
+            <Upload className="w-4 h-4" />
+            {t("upload.tabFile")}
+            {activeTab === "file" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-500 to-indigo-400" />}
+          </button>
+          <button onClick={() => setActiveTab("text")}
+            className={`flex-1 flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-medium transition-all duration-200 relative
+              ${activeTab === "text" ? "text-white" : "text-slate-500 hover:text-slate-300"}`}>
+            <ClipboardPaste className="w-4 h-4" />
+            {t("upload.tabText")}
+            {activeTab === "text" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-500 to-indigo-400" />}
+          </button>
+        </div>
+
+        {/* Tab content */}
+        <div className="p-8 space-y-6">
+          {activeTab === "file" ? (
+            <>
+              {/* Dropzone */}
+              <div {...getRootProps()} className={`relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-300 ${isDragActive ? "dropzone-active" : file ? "border-emerald-500/30 bg-emerald-500/5" : "border-surface-border hover:border-indigo-500/30 hover:bg-indigo-500/5"}`}>
+                <input {...getInputProps()} />
+                {file ? (
+                  <div className="flex flex-col items-center">
+                    <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4"><FileText className="w-8 h-8 text-emerald-400" /></div>
+                    <p className="text-white font-semibold">{file.name}</p>
+                    <p className="text-slate-500 text-sm mt-1">{(file.size / 1024).toFixed(1)} KB</p>
+                    <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="mt-3 text-xs text-slate-500 hover:text-red-400 transition-colors flex items-center gap-1"><X className="w-3 h-3" />{t("upload.remove")}</button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-4 transition-all duration-300 ${isDragActive ? "bg-indigo-500/20 scale-110" : "bg-surface-lighter"}`}>
+                      <Upload className={`w-10 h-10 transition-colors duration-300 ${isDragActive ? "text-indigo-400" : "text-slate-600"}`} />
+                    </div>
+                    <p className="text-white font-medium">{isDragActive ? t("upload.dropzoneActive") : t("upload.dropzoneDefault")}</p>
+                    <p className="text-slate-500 text-sm mt-1">{t("upload.supportedFormats")}</p>
+                  </div>
+                )}
               </div>
-              <p className="text-white font-medium">{isDragActive ? t("upload.dropzoneActive") : t("upload.dropzoneDefault")}</p>
-              <p className="text-slate-500 text-sm mt-1">{t("upload.supportedFormats")}</p>
-            </div>
+
+              <MetadataFields bookName={bookName} setBookName={setBookName} chapter={chapter} setChapter={setChapter}
+                chapterZh={chapterZh} setChapterZh={setChapterZh} script={script} setScript={setScript} />
+
+              <button onClick={handleFileUpload} disabled={!fileReady || uploading}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-navy-700 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:from-indigo-500 hover:to-navy-600 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/40">
+                {uploading ? (<><Loader2 className="w-4 h-4 animate-spin" />{t("upload.uploading")}</>) : (<><Upload className="w-4 h-4" />{t("upload.submit")}</>)}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Textarea */}
+              <div>
+                <textarea
+                  value={koText} onChange={(e) => setKoText(e.target.value)}
+                  placeholder={t("upload.textPlaceholder")}
+                  className="w-full min-h-[200px] px-4 py-3 bg-surface border border-surface-border rounded-xl text-white text-sm leading-relaxed placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 resize-y"
+                />
+                {koText.length > 0 && (
+                  <p className="text-right text-xs text-slate-500 mt-1">{koText.length.toLocaleString()} {locale === "ko" ? "자" : locale === "zh" ? "字" : "chars"}</p>
+                )}
+              </div>
+
+              <MetadataFields bookName={bookName} setBookName={setBookName} chapter={chapter} setChapter={setChapter}
+                chapterZh={chapterZh} setChapterZh={setChapterZh} script={script} setScript={setScript} />
+
+              <button onClick={handleTextSave} disabled={!textReady || uploading}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-navy-700 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:from-indigo-500 hover:to-navy-600 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/40">
+                {uploading ? (<><Loader2 className="w-4 h-4 animate-spin" />{t("upload.saving")}</>) : (<><Save className="w-4 h-4" />{t("upload.save")}</>)}
+              </button>
+            </>
           )}
         </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><BookOpen className="w-4 h-4 text-indigo-400" />{t("upload.bookName")}</label>
-            <input type="text" placeholder={t("upload.bookNamePlaceholder")} value={bookName} onChange={(e) => setBookName(e.target.value)}
-              className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
-          </div>
-          <div>
-            <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Hash className="w-4 h-4 text-indigo-400" />{t("upload.chapter")}</label>
-            <input type="text" placeholder={t("upload.chapterPlaceholder")} value={chapter} onChange={(e) => setChapter(e.target.value)}
-              className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Hash className="w-4 h-4 text-emerald-400" />{t("upload.chapterZh")}</label>
-            <input type="text" placeholder={t("upload.chapterZhPlaceholder")} value={chapterZh} onChange={(e) => setChapterZh(e.target.value)}
-              className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50" />
-          </div>
-          <div>
-            <label className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5"><Type className="w-4 h-4 text-emerald-400" />{t("upload.script")}</label>
-            <div className="relative">
-              <select value={script} onChange={(e) => setScript(e.target.value as "unknown" | "simplified" | "traditional")}
-                className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm appearance-none focus:outline-none focus:border-indigo-500/50 cursor-pointer">
-                <option value="unknown">{t("upload.scriptUnknown")}</option>
-                <option value="simplified">{t("upload.scriptSimplified")}</option>
-                <option value="traditional">{t("upload.scriptTraditional")}</option>
-              </select>
-              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-          </div>
-        </div>
-
-        <button onClick={handleUpload} disabled={!file || !bookName.trim() || !chapter.trim() || uploading}
-          className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-navy-700 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:from-indigo-500 hover:to-navy-600 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/40">
-          {uploading ? (<><Loader2 className="w-4 h-4 animate-spin" />{t("upload.uploading")}</>) : (<><Upload className="w-4 h-4" />{t("upload.submit")}</>)}
-        </button>
       </div>
 
+      {/* ───── Result / Error ───── */}
       {error && (<div className="glass-card border-red-500/30 bg-red-500/5 p-4 flex items-center gap-3 animate-fade-in"><AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" /><p className="text-red-300 text-sm">{error}</p></div>)}
 
       {result && (
@@ -153,7 +257,7 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* Existing Datasets */}
+      {/* ───── Existing Datasets ───── */}
       <section>
         <h2 className="text-xl font-semibold text-white flex items-center gap-2 mb-4">
           <Database className="w-5 h-5 text-indigo-400" />{t("upload.existingDatasets")}
@@ -213,6 +317,9 @@ export default function UploadPage() {
   );
 }
 
+// ──────────────────────────────────────────────
+// Sub-components
+// ──────────────────────────────────────────────
 function PreviewModal({ entry, onClose }: { entry: DatasetEntry; onClose: () => void }) {
   const { t, locale } = useLanguage();
   const dateLocale = locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR";

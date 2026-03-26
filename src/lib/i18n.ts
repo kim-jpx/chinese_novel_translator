@@ -483,6 +483,31 @@ const translations = {
     en: "e.g. 1, 2, 3...",
     zh: "例：1, 2, 3...",
   },
+  "upload.tabFile": {
+    ko: "파일 업로드",
+    en: "File Upload",
+    zh: "文件上传",
+  },
+  "upload.tabText": {
+    ko: "텍스트 붙여넣기",
+    en: "Paste Text",
+    zh: "粘贴文本",
+  },
+  "upload.textPlaceholder": {
+    ko: "번역 텍스트를 여기에 붙여넣으세요...",
+    en: "Paste translated text here...",
+    zh: "在此粘贴翻译文本...",
+  },
+  "upload.save": {
+    ko: "저장",
+    en: "Save",
+    zh: "保存",
+  },
+  "upload.saving": {
+    ko: "저장 중...",
+    en: "Saving...",
+    zh: "保存中...",
+  },
   "upload.submit": {
     ko: "업로드",
     en: "Upload",
