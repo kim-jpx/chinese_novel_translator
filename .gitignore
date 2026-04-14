@@ -37,3 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# scraper runtime artifacts
+tools/scraper/교술_chapters/.chrome_profile/
+tools/scraper/교술_chapters/.chrome_tmp/
+tools/scraper/교술_chapters/debug_ch*.png
+tools/scraper/교술_chapters/error_screenshot.png

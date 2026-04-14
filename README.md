@@ -208,6 +208,13 @@ Place the following in `translation-agent/data/`:
 
 ```
 chinese_novel_translator/
+├── archive/
+│   └── root-backend-prototype/   # Legacy root-level backend prototype files
+├── tools/
+│   └── scraper/
+│       ├── scrape_gyosul.js      # External text scraping utility
+│       ├── SCRAPER_README.md     # Scraper runbook
+│       └── 교술_chapters/         # Scraper outputs and debug artifacts
 ├── src/
 │   ├── app/
 │   │   ├── page.tsx              # Dashboard

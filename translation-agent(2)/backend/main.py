@@ -16,6 +16,24 @@ from routers import glossary, dataset, translate, upload
 
 load_dotenv()
 
+
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://192.168.64.2:3000",
+]
+
+
+def get_cors_origins() -> list[str]:
+    cors_origins = os.getenv("CORS_ORIGINS", "").strip()
+    if not cors_origins:
+        return DEFAULT_CORS_ORIGINS
+
+    parsed_origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+    return parsed_origins or DEFAULT_CORS_ORIGINS
+
+
 app = FastAPI(
     title="Translation Agent API",
     description="중한 문학 번역 에이전트 - 무협/선협/고장극/언정",
@@ -24,7 +42,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

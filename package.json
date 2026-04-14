@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "scraper:gyosul": "node tools/scraper/scrape_gyosul.js"
   },
   "dependencies": {
     "lucide-react": "^1.7.0",
