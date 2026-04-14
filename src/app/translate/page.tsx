@@ -6,7 +6,7 @@ import {
   Loader2, Sparkles, Info, ChevronDown, Globe,
 } from "lucide-react";
 import { translate, getBooks } from "@/lib/api";
-import type { TranslationRequest, TranslationResponse, Annotation, CulturalFlag, Book } from "@/lib/types";
+import type { TranslationRequest, TranslationResponse, Annotation, CulturalFlag, BookInfo } from "@/lib/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 import type { TranslationKey } from "@/lib/i18n";
 
@@ -30,7 +30,7 @@ const ERA_KEYS: { value: string; key: TranslationKey }[] = [
 ];
 
 export default function TranslatePage() {
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<BookInfo[]>([]);
   const [text, setText] = useState("");
   const [book, setBook] = useState("");
   const [genres, setGenres] = useState<string[]>([]);
@@ -92,7 +92,7 @@ export default function TranslatePage() {
                 <select value={book} onChange={(e) => setBook(e.target.value)}
                   className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm appearance-none focus:outline-none focus:border-indigo-500/50 cursor-pointer">
                   <option value="">{t("translate.selectBookPlaceholder")}</option>
-                  {books.map((b) => (<option key={b.name} value={b.name}>{b.name}</option>))}
+                  {books.map((b) => (<option key={b.book} value={b.book}>{b.book}</option>))}
                 </select>
                 <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
@@ -189,8 +189,8 @@ export default function TranslatePage() {
                   <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-4"><BookOpen className="w-4 h-4 text-emerald-400" />{t("translate.termsUsed")} ({result.terms_used.length})</h3>
                   <div className="flex flex-wrap gap-2">
                     {result.terms_used.map((term) => (
-                      <span key={term.term_zh} className="px-3 py-1.5 rounded-lg bg-surface-lighter border border-surface-border text-sm">
-                        <span className="text-slate-400">{term.term_zh}</span><span className="mx-1.5 text-slate-600">→</span><span className="text-white">{term.term_kr}</span>
+                      <span key={term} className="px-3 py-1.5 rounded-lg bg-surface-lighter border border-surface-border text-sm text-white">
+                        {term}
                       </span>
                     ))}
                   </div>
@@ -211,20 +211,21 @@ export default function TranslatePage() {
   );
 }
 
+// Backend Annotation: { term, type, explanation, keep_original }
 function AnnotationCard({ annotation }: { annotation: Annotation }) {
   return (
     <div className="p-3 bg-surface rounded-lg border border-surface-border">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20">{annotation.type}</span>
-        <span className="text-white font-medium text-sm">{annotation.term_zh}</span>
-        <span className="text-slate-600">→</span>
-        <span className="text-indigo-300 font-medium text-sm">{annotation.term_kr}</span>
+        <span className="text-white font-medium text-sm">{annotation.term}</span>
+        {annotation.keep_original && <span className="text-xs text-emerald-400 ml-auto">원문유지</span>}
       </div>
       <p className="text-slate-400 text-xs mt-1">{annotation.explanation}</p>
     </div>
   );
 }
 
+// Backend CulturalFlag: { term, issue, ai_decision, ai_reasoning, suggested, user_action_needed }
 function CulturalFlagCard({ flag, onAction }: { flag: CulturalFlag; onAction: (a: "keep" | "change") => void }) {
   const { t } = useLanguage();
   return (
@@ -233,11 +234,12 @@ function CulturalFlagCard({ flag, onAction }: { flag: CulturalFlag; onAction: (a
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
             {flag.user_action_needed && <AlertTriangle className="w-4 h-4 text-amber-400" />}
-            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">{flag.category}</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">{flag.ai_decision}</span>
           </div>
-          <p className="text-white text-sm font-medium">&ldquo;{flag.original}&rdquo;</p>
-          <p className="text-slate-400 text-xs mt-1">{flag.explanation}</p>
-          {flag.suggestion && <p className="text-indigo-300 text-xs mt-1">{t("translate.suggestion")} {flag.suggestion}</p>}
+          <p className="text-white text-sm font-medium">&ldquo;{flag.term}&rdquo;</p>
+          <p className="text-slate-400 text-xs mt-1">{flag.issue}</p>
+          <p className="text-slate-500 text-xs mt-0.5 italic">{flag.ai_reasoning}</p>
+          {flag.suggested && <p className="text-indigo-300 text-xs mt-1">{t("translate.suggestion")} {flag.suggested}</p>}
         </div>
         {flag.user_action_needed && (
           <div className="flex gap-2 flex-shrink-0">

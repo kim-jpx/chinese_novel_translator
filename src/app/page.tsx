@@ -9,18 +9,20 @@ import {
   Clock,
   AlertCircle,
   BarChart3,
+  CheckCircle,
+  Edit,
 } from "lucide-react";
 import { getBooks, getStats } from "@/lib/api";
-import type { Book, DatasetStats, UploadRecord } from "@/lib/types";
+import type { BookInfo, DatasetStats } from "@/lib/types";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function DashboardPage() {
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<BookInfo[]>([]);
   const [stats, setStats] = useState<DatasetStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { t, locale } = useLanguage();
+  const { t } = useLanguage();
 
   useEffect(() => {
     async function loadData() {
@@ -38,6 +40,7 @@ export default function DashboardPage() {
       }
     }
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (loading) return <DashboardSkeleton />;
@@ -67,15 +70,15 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Stats Cards */}
+      {/* Stats Cards — matched to backend DatasetStats */}
       <div className="grid grid-cols-4 gap-5">
         <StatCard icon={BookOpen} label={t("dashboard.totalBooks")} value={stats?.total_books ?? 0} color="indigo" />
-        <StatCard icon={FileText} label={t("dashboard.totalChapters")} value={stats?.total_chapters ?? 0} color="emerald" />
-        <StatCard icon={BarChart3} label={t("dashboard.totalTerms")} value={stats?.total_terms ?? 0} color="sky" />
-        <StatCard icon={Sparkles} label={t("dashboard.newTerms")} value={stats?.new_terms_count ?? 0} color="gold" badge />
+        <StatCard icon={FileText} label={t("dashboard.totalChapters")} value={stats?.total_records ?? 0} color="emerald" />
+        <StatCard icon={BarChart3} label={t("dashboard.totalTerms")} value={stats?.records_with_zh ?? 0} color="sky" />
+        <StatCard icon={CheckCircle} label={t("dashboard.confirmed")} value={stats?.confirmed ?? 0} color="gold" badge={stats?.draft !== undefined && stats.draft > 0} />
       </div>
 
-      {/* Book Progress Cards */}
+      {/* Book Progress Cards — uses BookInfo from backend */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-white flex items-center gap-2">
@@ -88,7 +91,7 @@ export default function DashboardPage() {
         </div>
         <div className="grid grid-cols-3 gap-5">
           {books.map((book) => (
-            <BookCard key={book.name} book={book} />
+            <BookCard key={book.book} book={book} />
           ))}
           {books.length === 0 && !error && (
             <div className="col-span-3 glass-card p-12 text-center">
@@ -102,36 +105,34 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Recent Uploads */}
+      {/* Draft/Confirmed Summary */}
       <section>
         <h2 className="text-xl font-semibold text-white flex items-center gap-2 mb-4">
           <Clock className="w-5 h-5 text-indigo-400" />
           {t("dashboard.recentUploads")}
         </h2>
-        <div className="glass-card overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-surface-border">
-                <th className="text-left px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("dashboard.filename")}</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("dashboard.book")}</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("dashboard.chapter")}</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("dashboard.newTermsCol")}</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("dashboard.uploadDate")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-border">
-              {stats?.recent_uploads?.map((record) => (
-                <UploadRow key={record.id} record={record} locale={locale} />
-              ))}
-              {(!stats?.recent_uploads || stats.recent_uploads.length === 0) && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm">
-                    {t("dashboard.noUploads")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="glass-card p-6">
+          {stats && stats.total_records > 0 ? (
+            <div className="grid grid-cols-3 gap-6">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-white">{stats.total_records}</p>
+                <p className="text-sm text-slate-400 mt-1">{t("dashboard.totalChapters")}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-3xl font-bold text-emerald-400">{stats.confirmed}</p>
+                <p className="text-sm text-slate-400 mt-1">{t("dashboard.confirmed")}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-3xl font-bold text-amber-400">{stats.draft}</p>
+                <p className="text-sm text-slate-400 mt-1">{t("dashboard.draft")}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <FileText className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-500 text-sm">{t("dashboard.noUploads")}</p>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -160,8 +161,8 @@ function StatCard({
         <div className={`w-10 h-10 rounded-lg ${c.bg} flex items-center justify-center`}>
           <Icon className={`w-5 h-5 ${c.text}`} />
         </div>
-        {badge && value > 0 && (
-          <span className="badge-pulse px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-semibold border border-amber-500/30">NEW</span>
+        {badge && (
+          <span className="badge-pulse px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-semibold border border-amber-500/30">DRAFT</span>
         )}
       </div>
       <div className="mt-4">
@@ -173,22 +174,24 @@ function StatCard({
   );
 }
 
-function BookCard({ book }: { book: Book }) {
+function BookCard({ book }: { book: BookInfo }) {
   const { t } = useLanguage();
-  const progress = book.total_chapters > 0 ? Math.round((book.completed_chapters / book.total_chapters) * 100) : 0;
+  const totalChapters = book.chapters_ko.length;
+  const withSource = book.chapters_zh.filter((c) => c && c !== "").length;
+  const progress = totalChapters > 0 ? Math.round((withSource / totalChapters) * 100) : 0;
 
   return (
     <div className="glass-card-hover p-5">
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
-          <h3 className="text-white font-semibold truncate">{book.name}</h3>
+          <h3 className="text-white font-semibold truncate">{book.book}</h3>
           <p className="text-xs text-slate-500 mt-1">
-            {book.completed_chapters} / {book.total_chapters} {t("dashboard.chapters")}
+            {totalChapters} {t("dashboard.chapters")}
           </p>
         </div>
-        {(book.new_terms_count ?? 0) > 0 && (
-          <span className="badge-pulse flex-shrink-0 ml-2 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-semibold border border-amber-500/30">
-            +{book.new_terms_count}
+        {book.genre.length > 0 && (
+          <span className="flex-shrink-0 ml-2 px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 text-xs border border-indigo-500/20">
+            {book.genre[0]}
           </span>
         )}
       </div>
@@ -201,31 +204,12 @@ function BookCard({ book }: { book: Book }) {
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
         </div>
       </div>
-      {book.latest_upload && (
-        <p className="text-xs text-slate-500 mt-3 flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          {t("dashboard.lastUpload")} {new Date(book.latest_upload).toLocaleDateString("ko-KR")}
-        </p>
-      )}
+      <div className="flex gap-2 mt-3">
+        <span className="text-xs text-slate-500 flex items-center gap-1">
+          <Edit className="w-3 h-3" /> {withSource} / {totalChapters}
+        </span>
+      </div>
     </div>
-  );
-}
-
-function UploadRow({ record, locale }: { record: UploadRecord; locale: string }) {
-  return (
-    <tr className="hover:bg-surface-lighter/40 transition-colors duration-150">
-      <td className="px-6 py-4 text-sm text-slate-300 font-mono">{record.filename}</td>
-      <td className="px-6 py-4 text-sm text-white font-medium">{record.book}</td>
-      <td className="px-6 py-4 text-sm text-slate-300">{record.chapter}</td>
-      <td className="px-6 py-4">
-        {record.new_terms_found > 0 ? (
-          <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 text-xs font-semibold">+{record.new_terms_found}</span>
-        ) : (
-          <span className="text-xs text-slate-500">—</span>
-        )}
-      </td>
-      <td className="px-6 py-4 text-sm text-slate-400">{new Date(record.uploaded_at).toLocaleString(locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR")}</td>
-    </tr>
   );
 }
 

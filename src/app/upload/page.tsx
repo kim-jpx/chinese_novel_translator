@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { uploadFile, uploadText, getDatasets } from "@/lib/api";
-import type { GlossaryTerm, UploadResponse, DatasetEntry } from "@/lib/types";
+import type { UploadResult, DatasetRecord } from "@/lib/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 // ──────────────────────────────────────────────
@@ -73,7 +73,7 @@ export default function UploadPage() {
   const [chapterZh, setChapterZh] = useState("");
   const [script, setScript] = useState<"unknown" | "simplified" | "traditional">("unknown");
   const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<UploadResponse | null>(null);
+  const [result, setResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // file tab
@@ -83,10 +83,10 @@ export default function UploadPage() {
   const [koText, setKoText] = useState("");
 
   // datasets
-  const [datasets, setDatasets] = useState<DatasetEntry[]>([]);
+  const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(true);
   const [collapsedBooks, setCollapsedBooks] = useState<Set<string>>(new Set());
-  const [previewEntry, setPreviewEntry] = useState<DatasetEntry | null>(null);
+  const [previewEntry, setPreviewEntry] = useState<DatasetRecord | null>(null);
   const { t, locale } = useLanguage();
 
   const loadDatasets = useCallback(async () => {
@@ -137,17 +137,16 @@ export default function UploadPage() {
     setChapterZh(""); setScript("unknown"); setResult(null); setError(null);
   };
 
-  const groupedDatasets = datasets.reduce<Record<string, DatasetEntry[]>>((acc, entry) => {
+  // Group datasets by book using DatasetRecord.book
+  const groupedDatasets = datasets.reduce<Record<string, DatasetRecord[]>>((acc, entry) => {
     if (!acc[entry.book]) acc[entry.book] = []; acc[entry.book].push(entry); return acc;
   }, {});
 
-  Object.values(groupedDatasets).forEach((entries) => entries.sort((a, b) => {
-    const numA = parseInt(a.chapter, 10); const numB = parseInt(b.chapter, 10);
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return a.chapter.localeCompare(b.chapter);
-  }));
+  // Sort by chapter_ko (number)
+  Object.values(groupedDatasets).forEach((entries) => entries.sort((a, b) => a.chapter_ko - b.chapter_ko));
 
   const toggleBookCollapse = (book: string) => setCollapsedBooks((prev) => { const next = new Set(prev); if (next.has(book)) next.delete(book); else next.add(book); return next; });
-  const dateLocale = locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR";
+
 
   const fileReady = !!file && !!bookName.trim() && !!chapter.trim();
   const textReady = !!koText.trim() && !!bookName.trim() && !!chapter.trim();
@@ -246,11 +245,24 @@ export default function UploadPage() {
 
       {result && (
         <div className="space-y-4 animate-slide-up">
-          <div className="glass-card border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center gap-3"><CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" /><p className="text-emerald-300 text-sm">{result.message}</p></div>
+          <div className="glass-card border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+            <div className="text-emerald-300 text-sm">
+              <p className="font-medium">{result.book} — {t("upload.chapter")} {result.chapter}</p>
+              <p className="text-emerald-400/70 text-xs mt-0.5">{result.status} · {result.zh_fetched ? t("upload.sourceZhFetched") : t("upload.sourceZhNotFetched")}</p>
+            </div>
+          </div>
           {result.new_terms.length > 0 && (
             <div className="glass-card p-6">
               <h3 className="text-white font-semibold flex items-center gap-2 mb-4"><Plus className="w-4 h-4 text-amber-400" />{t("upload.newTermCandidates")} ({result.new_terms.length})</h3>
-              <div className="space-y-2">{result.new_terms.map((term) => (<NewTermRow key={term.term_zh} term={term} />))}</div>
+              <div className="flex flex-wrap gap-2">
+                {result.new_terms.map((term) => (
+                  <span key={term} className="px-3 py-1.5 rounded-lg bg-surface-lighter border border-amber-500/20 text-sm text-amber-200">
+                    {term}
+                    <span className="ml-1.5 badge-pulse inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  </span>
+                ))}
+              </div>
             </div>
           )}
           <button onClick={handleReset} className="w-full py-3 rounded-xl border border-surface-border text-slate-400 font-medium text-sm hover:text-white hover:border-indigo-500/30 transition-all duration-200 flex items-center justify-center gap-2"><Plus className="w-4 h-4" />{t("upload.uploadMore")}</button>
@@ -270,15 +282,15 @@ export default function UploadPage() {
           <div className="glass-card p-12 text-center"><Database className="w-12 h-12 text-slate-600 mx-auto mb-3" /><p className="text-slate-400">{t("upload.noDatasets")}</p><p className="text-slate-600 text-sm mt-1">{t("upload.noDatasetsSub")}</p></div>
         ) : (
           <div className="space-y-3">
-            {Object.entries(groupedDatasets).map(([bookName, entries]) => (
-              <div key={bookName} className="glass-card overflow-hidden">
-                <button onClick={() => toggleBookCollapse(bookName)} className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-surface-lighter/40 transition-colors duration-150">
-                  {collapsedBooks.has(bookName) ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+            {Object.entries(groupedDatasets).map(([bk, entries]) => (
+              <div key={bk} className="glass-card overflow-hidden">
+                <button onClick={() => toggleBookCollapse(bk)} className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-surface-lighter/40 transition-colors duration-150">
+                  {collapsedBooks.has(bk) ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
                   <BookOpen className="w-4 h-4 text-indigo-400" />
-                  <span className="text-white font-semibold text-sm">{bookName}</span>
+                  <span className="text-white font-semibold text-sm">{bk}</span>
                   <span className="ml-auto px-2 py-0.5 rounded-full bg-surface-lighter text-slate-400 text-xs">{entries.length}{locale === "ko" ? "화" : locale === "zh" ? "话" : " ch."}</span>
                 </button>
-                {!collapsedBooks.has(bookName) && (
+                {!collapsedBooks.has(bk) && (
                   <div className="border-t border-surface-border">
                     <table className="w-full">
                       <thead>
@@ -287,18 +299,18 @@ export default function UploadPage() {
                           <th className="text-center px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-28">{t("upload.sourceZh")}</th>
                           <th className="text-center px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-28">{t("upload.translKo")}</th>
                           <th className="text-center px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-24">{t("upload.script")}</th>
-                          <th className="text-left px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">{t("upload.createdAt")}</th>
+                          <th className="text-center px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-24">{t("upload.status")}</th>
                           <th className="w-12" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-surface-border/30">
                         {entries.map((entry) => (
-                          <tr key={`${entry.book}-${entry.chapter}`} onClick={() => setPreviewEntry(entry)} className="hover:bg-surface-lighter/30 transition-colors duration-150 cursor-pointer group">
-                            <td className="px-5 py-3 text-sm text-white font-medium">{entry.chapter}{locale === "ko" ? "화" : locale === "zh" ? "话" : ""}</td>
+                          <tr key={entry.id} onClick={() => setPreviewEntry(entry)} className="hover:bg-surface-lighter/30 transition-colors duration-150 cursor-pointer group">
+                            <td className="px-5 py-3 text-sm text-white font-medium">{entry.chapter_ko}{locale === "ko" ? "화" : locale === "zh" ? "话" : ""}</td>
                             <td className="px-5 py-3 text-center">{entry.zh_text ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/10"><Check className="w-3.5 h-3.5 text-emerald-400" /></span> : <span className="text-slate-600 text-xs">—</span>}</td>
                             <td className="px-5 py-3 text-center">{entry.ko_text ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-500/10"><Check className="w-3.5 h-3.5 text-indigo-400" /></span> : <span className="text-slate-600 text-xs">—</span>}</td>
                             <td className="px-5 py-3 text-center"><ScriptBadge script={entry.script} /></td>
-                            <td className="px-5 py-3 text-sm text-slate-400">{new Date(entry.created_at).toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" })}</td>
+                            <td className="px-5 py-3 text-center"><StatusBadge status={entry.status} /></td>
                             <td className="px-3 py-3"><Eye className="w-4 h-4 text-slate-600 group-hover:text-indigo-400 transition-colors" /></td>
                           </tr>
                         ))}
@@ -320,7 +332,7 @@ export default function UploadPage() {
 // ──────────────────────────────────────────────
 // Sub-components
 // ──────────────────────────────────────────────
-function PreviewModal({ entry, onClose }: { entry: DatasetEntry; onClose: () => void }) {
+function PreviewModal({ entry, onClose }: { entry: DatasetRecord; onClose: () => void }) {
   const { t, locale } = useLanguage();
   const dateLocale = locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR";
 
@@ -334,8 +346,8 @@ function PreviewModal({ entry, onClose }: { entry: DatasetEntry; onClose: () => 
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center"><Eye className="w-4 h-4 text-indigo-400" /></div>
             <div>
-              <h3 className="text-white font-semibold text-sm">{entry.book} — {entry.chapter}{locale === "ko" ? "화" : locale === "zh" ? "话" : ""}</h3>
-              <p className="text-xs text-slate-500">{new Date(entry.created_at).toLocaleDateString(dateLocale, { year: "numeric", month: "long", day: "numeric" })}</p>
+              <h3 className="text-white font-semibold text-sm">{entry.book} — {entry.chapter_ko}{locale === "ko" ? "화" : locale === "zh" ? "话" : ""}</h3>
+              <p className="text-xs text-slate-500">{entry.updated_at ? new Date(entry.updated_at).toLocaleDateString(dateLocale, { year: "numeric", month: "long", day: "numeric" }) : "—"}</p>
             </div>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg bg-surface-lighter flex items-center justify-center text-slate-400 hover:text-white hover:bg-surface-border transition-colors"><X className="w-4 h-4" /></button>
@@ -344,6 +356,7 @@ function PreviewModal({ entry, onClose }: { entry: DatasetEntry; onClose: () => 
           <div className="flex gap-2">
             <span className={`px-3 py-1 rounded-full text-xs font-medium border ${entry.zh_text ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" : "bg-surface-lighter text-slate-500 border-surface-border"}`}>{t("upload.source")} {entry.zh_text ? "✓" : "✗"}</span>
             <span className={`px-3 py-1 rounded-full text-xs font-medium border ${entry.ko_text ? "bg-indigo-500/10 text-indigo-300 border-indigo-500/20" : "bg-surface-lighter text-slate-500 border-surface-border"}`}>{t("upload.translation")} {entry.ko_text ? "✓" : "✗"}</span>
+            <StatusBadge status={entry.status} />
           </div>
           {entry.ko_text ? (
             <div><h4 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-1.5">📖 {t("upload.previewTitle")}</h4>
@@ -364,17 +377,11 @@ function PreviewModal({ entry, onClose }: { entry: DatasetEntry; onClose: () => 
   );
 }
 
-function NewTermRow({ term }: { term: GlossaryTerm }) {
-  return (
-    <div className="flex items-center gap-4 p-3 bg-surface rounded-lg border border-surface-border hover:border-indigo-500/20 transition-colors">
-      <span className="text-white font-medium text-base min-w-[100px]">{term.term_zh}</span>
-      <span className="text-slate-600">→</span>
-      <span className="text-indigo-300 font-medium">{term.term_kr}</span>
-      {term.pos && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 text-xs border border-emerald-500/20">{term.pos}</span>}
-      {term.domain && <span className="px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-300 text-xs border border-sky-500/20">{term.domain}</span>}
-      {term.is_new && <span className="ml-auto badge-pulse px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-semibold border border-amber-500/30">NEW</span>}
-    </div>
-  );
+function StatusBadge({ status }: { status: "draft" | "confirmed" }) {
+  if (status === "confirmed") {
+    return <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 text-xs font-medium border border-emerald-500/20">confirmed</span>;
+  }
+  return <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 text-xs font-medium border border-amber-500/20">draft</span>;
 }
 
 function ScriptBadge({ script }: { script?: "simplified" | "traditional" | "unknown" }) {

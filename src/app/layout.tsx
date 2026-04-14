@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import HealthBanner from "@/components/HealthBanner";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 
 export const metadata: Metadata = {
@@ -20,6 +21,7 @@ export default function RootLayout({
           <div className="flex min-h-screen">
             <Sidebar />
             <main className="flex-1 ml-64">
+              <HealthBanner />
               <div className="p-8 max-w-[1600px] mx-auto">
                 {children}
               </div>

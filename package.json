@@ -11,6 +11,11 @@
   "dependencies": {
     "lucide-react": "^1.7.0",
     "next": "14.2.35",
+    "playwright": "^1.59.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer": "^24.40.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "^18",
     "react-dom": "^18",
     "react-dropzone": "^15.0.0"

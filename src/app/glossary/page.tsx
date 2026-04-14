@@ -13,15 +13,15 @@ import {
   Search,
   Layers,
 } from "lucide-react";
-import { getGlossary, getBooks, updateGlossaryTerm } from "@/lib/api";
-import type { GlossaryTerm, Book } from "@/lib/types";
+import { getGlossary, getGlossaryBooks, updateGlossaryTerm } from "@/lib/api";
+import type { GlossaryTerm } from "@/lib/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 type FilterType = "book" | "pos" | "policy" | "unknown";
 
 export default function GlossaryPage() {
   const [terms, setTerms] = useState<GlossaryTerm[]>([]);
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -39,7 +39,7 @@ export default function GlossaryPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [termsData, booksData] = await Promise.all([getGlossary(), getBooks()]);
+        const [termsData, booksData] = await Promise.all([getGlossary(), getGlossaryBooks()]);
         setTerms(termsData);
         setBooks(booksData);
       } catch { /* */ } finally { setLoading(false); }
@@ -50,10 +50,10 @@ export default function GlossaryPage() {
   const filteredTerms = terms.filter((term) => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      if (!term.term_zh.toLowerCase().includes(q) && !term.term_kr.toLowerCase().includes(q)) return false;
+      if (!term.term_zh.toLowerCase().includes(q) && !term.term_ko.toLowerCase().includes(q)) return false;
     }
     if (onlyUnknown && knownSet.has(term.term_zh)) return false;
-    if (filterType === "book" && filterValue && term.book !== filterValue) return false;
+    if (filterType === "book" && filterValue && term.book !== filterValue && term.domain !== filterValue) return false;
     if (filterType === "pos" && filterValue && term.pos !== filterValue) return false;
     if (filterType === "policy" && filterValue && term.policy !== filterValue) return false;
     return true;
@@ -78,7 +78,8 @@ export default function GlossaryPage() {
   const saveEdit = async () => {
     if (!currentTerm) return;
     try {
-      await updateGlossaryTerm(currentTerm.term_zh, editData);
+      const fullTerm = { ...currentTerm, ...editData };
+      await updateGlossaryTerm(currentTerm.term_zh, fullTerm);
       setTerms((prev) => prev.map((t2) => t2.term_zh === currentTerm.term_zh ? { ...t2, ...editData } : t2));
       setEditing(false);
     } catch { /* */ }
@@ -113,7 +114,7 @@ export default function GlossaryPage() {
       {showFilters && (
         <div className="glass-card p-4 animate-fade-in">
           <div className="flex flex-wrap gap-3 items-center">
-            <FilterDropdown label={t("glossary.byBook")} active={filterType === "book"} value={filterValue} options={books.map((b) => b.name)}
+            <FilterDropdown label={t("glossary.byBook")} active={filterType === "book"} value={filterValue} options={books}
               onSelect={(v) => { setFilterType("book"); setFilterValue(v); setCurrentIndex(0); }} onClear={() => { setFilterType(null); setFilterValue(""); }} clearLabel={t("glossary.clearFilter")} />
             <FilterDropdown label={t("glossary.byPos")} active={filterType === "pos"} value={filterValue} options={posValues}
               onSelect={(v) => { setFilterType("pos"); setFilterValue(v); setCurrentIndex(0); }} onClear={() => { setFilterType(null); setFilterValue(""); }} clearLabel={t("glossary.clearFilter")} />
@@ -151,7 +152,7 @@ export default function GlossaryPage() {
                   <div className="w-full max-w-sm space-y-4">
                     <div><label className="text-xs text-slate-500">{t("glossary.korean")}</label>
                       <input className="w-full mt-1 px-3 py-2 bg-surface border border-surface-border rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500/50"
-                        value={editData.term_kr ?? currentTerm.term_kr} onChange={(e) => setEditData({ ...editData, term_kr: e.target.value })} onClick={(e) => e.stopPropagation()} /></div>
+                        value={editData.term_ko ?? currentTerm.term_ko} onChange={(e) => setEditData({ ...editData, term_ko: e.target.value })} onClick={(e) => e.stopPropagation()} /></div>
                     <div className="grid grid-cols-2 gap-3">
                       <div><label className="text-xs text-slate-500">{t("glossary.pos")}</label>
                         <input className="w-full mt-1 px-3 py-2 bg-surface border border-surface-border rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500/50"
@@ -162,7 +163,7 @@ export default function GlossaryPage() {
                     </div>
                     <div><label className="text-xs text-slate-500">{t("glossary.note")}</label>
                       <textarea className="w-full mt-1 px-3 py-2 bg-surface border border-surface-border rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500/50 resize-none" rows={2}
-                        value={editData.note ?? currentTerm.note ?? ""} onChange={(e) => setEditData({ ...editData, note: e.target.value })} onClick={(e) => e.stopPropagation()} /></div>
+                        value={editData.notes ?? currentTerm.notes ?? ""} onChange={(e) => setEditData({ ...editData, notes: e.target.value })} onClick={(e) => e.stopPropagation()} /></div>
                     <div className="flex gap-2 justify-end">
                       <button onClick={(e) => { e.stopPropagation(); setEditing(false); setEditData({}); }}
                         className="px-3 py-1.5 rounded-lg bg-surface-lighter text-slate-400 text-sm hover:text-white transition-colors"><X className="w-4 h-4" /></button>
@@ -173,13 +174,13 @@ export default function GlossaryPage() {
                 ) : (
                   <>
                     <p className="text-xs text-slate-500 uppercase tracking-widest mb-2">{t("glossary.korean")}</p>
-                    <p className="text-4xl font-bold text-white mb-6">{currentTerm.term_kr}</p>
+                    <p className="text-4xl font-bold text-white mb-6">{currentTerm.term_ko}</p>
                     <div className="flex flex-wrap gap-2 justify-center mb-4">
                       {currentTerm.pos && <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 text-xs border border-emerald-500/20">{currentTerm.pos}</span>}
                       {currentTerm.domain && <span className="px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 text-xs border border-sky-500/20">{currentTerm.domain}</span>}
                       {currentTerm.policy && <span className="px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 text-xs border border-violet-500/20">{currentTerm.policy}</span>}
                     </div>
-                    {currentTerm.note && <p className="text-sm text-slate-400 text-center max-w-md">{currentTerm.note}</p>}
+                    {currentTerm.notes && <p className="text-sm text-slate-400 text-center max-w-md">{currentTerm.notes}</p>}
                     <button onClick={(e) => { e.stopPropagation(); setEditing(true); setEditData({}); }}
                       className="mt-4 flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-400 transition-colors"><Edit3 className="w-3 h-3" />{t("glossary.edit")}</button>
                   </>

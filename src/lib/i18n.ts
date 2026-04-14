@@ -167,6 +167,16 @@ const translations = {
     en: "Could not load data",
     zh: "无法加载数据",
   },
+  "dashboard.confirmed": {
+    ko: "확정 완료",
+    en: "Confirmed",
+    zh: "已确认",
+  },
+  "dashboard.draft": {
+    ko: "초안",
+    en: "Draft",
+    zh: "草稿",
+  },
 
   // ----- Glossary -----
   "glossary.title": {
@@ -637,6 +647,38 @@ const translations = {
     ko: "미확인",
     en: "Unknown",
     zh: "未确认",
+  },
+  "upload.status": {
+    ko: "상태",
+    en: "Status",
+    zh: "状态",
+  },
+  "upload.sourceZhFetched": {
+    ko: "원문 수집 완료",
+    en: "Source fetched",
+    zh: "原文已获取",
+  },
+  "upload.sourceZhNotFetched": {
+    ko: "원문 미수집",
+    en: "Source not fetched",
+    zh: "原文未获取",
+  },
+
+  // ----- Health Check -----
+  "health.disconnected": {
+    ko: "백엔드 서버에 연결할 수 없습니다",
+    en: "Cannot connect to backend server",
+    zh: "无法连接后端服务器",
+  },
+  "health.disconnectedDesc": {
+    ko: "FastAPI 서버가 실행 중인지 확인하세요",
+    en: "Make sure the FastAPI server is running",
+    zh: "请确认FastAPI服务器是否正在运行",
+  },
+  "health.warning": {
+    ko: "백엔드 구성 확인 필요",
+    en: "Backend configuration check needed",
+    zh: "需要检查后端配置",
   },
 
   // ----- Genre Labels -----
