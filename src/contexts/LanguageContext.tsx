@@ -19,14 +19,12 @@ const STORAGE_KEY = "translator-locale";
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>("ko");
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
     if (saved && ["ko", "en", "zh"].includes(saved)) {
       setLocaleState(saved);
     }
-    setMounted(true);
   }, []);
 
   const setLocale = (l: Locale) => {
@@ -35,10 +33,6 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   };
 
   const translate = (key: TranslationKey) => t(key, locale);
-
-  if (!mounted) {
-    return <>{children}</>;
-  }
 
   return (
     <LanguageContext.Provider value={{ locale, setLocale, t: translate }}>

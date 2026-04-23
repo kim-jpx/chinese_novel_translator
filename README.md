@@ -10,13 +10,13 @@ It handles the unique challenges of literary translation — cultural sensitivit
 
 | Layer | Tech | Port |
 |-------|------|------|
-| **Frontend** | Next.js 14 + TypeScript + TailwindCSS (Dark Glassmorphism UI) | `3001` |
+| **Frontend** | Next.js 14 + TypeScript + TailwindCSS (Dark Glassmorphism UI) | `3000` |
 | **Backend** | FastAPI (Python) + Claude API (Anthropic) | `8000` |
-| **Data** | JSONL dataset + JSON glossary (file-based, no DB) | — |
+| **Data** | Supabase (`dataset_records`) + canonical JSON glossary/style guide files | — |
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Next.js Frontend (localhost:3001)            │
+│  Next.js Frontend (localhost:3000)            │
 │  ┌──────┐ ┌────────┐ ┌─────────┐ ┌────────┐ │
 │  │Dash- │ │Glossary│ │Translate│ │Upload  │ │
 │  │board │ │        │ │  Agent  │ │        │ │
@@ -32,8 +32,8 @@ It handles the unique challenges of literary translation — cultural sensitivit
 │  │ Router │ │Router │ │ Router  │ │Router│  │
 │  └───┬────┘ └──┬────┘ └────┬────┘ └──┬───┘  │
 │      │         │           │          │      │
-│  glossary   dataset     Claude     auto-     │
-│   .json     .jsonl       API      fetch zh   │
+│ glossary.json Supabase  Claude     auto-     │
+│ style_guide  dataset    API      fetch zh    │
 └──────────────────────────────────────────────┘
 ```
 
@@ -111,7 +111,7 @@ Detect script type (simplified / traditional)
 Extract new glossary term candidates
         │
         ▼
-Store as "draft" record in dataset
+Store as "draft" record in Supabase dataset
         │
         ▼
 Human review & edit
@@ -176,6 +176,11 @@ npm install
 npm run dev  # or PORT=3001 npm run dev if port 3000 is busy
 ```
 
+Or start both frontend and backend together from the repo root:
+```bash
+./start-dev.sh
+```
+
 ### 2. Backend
 ```bash
 cd translation-agent
@@ -183,24 +188,48 @@ python3 -m venv venv
 ./venv/bin/pip install -r backend/requirements.txt
 ```
 
-Configure `translation-agent/backend/.env`:
+Use the template at `translation-agent/backend/.env.example`, then fill in `translation-agent/backend/.env`:
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
+DATASET_BACKEND=supabase
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 DATASET_PATH=../data/dataset_multinovel.jsonl
 GLOSSARY_PATH=../data/glossary.json
 STYLE_GUIDE_PATH=../data/style_guide_v1.md
+JOB_STORE_PATH=../data/jobs.sqlite3
+```
+
+Create the dataset table in Supabase:
+```bash
+psql "$SUPABASE_DB_URL" -f supabase/schema.sql
+```
+
+Normalize the glossary and migrate the existing JSONL dataset:
+```bash
+./venv/bin/python scripts/migrate_glossary_to_canonical.py
+./venv/bin/python scripts/migrate_dataset_to_supabase.py --report-file migration-report.json
 ```
 
 Start the server:
 ```bash
-./venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### 3. Data Files
 Place the following in `translation-agent/data/`:
-- `glossary.json` — term dictionary
-- `dataset_multinovel.jsonl` — parallel corpus
+- `glossary.json` — canonical term dictionary copied from the repo-root `glossary.json`
+- `dataset_multinovel.jsonl` — backup / migration source for the legacy parallel corpus
 - `style_guide_v1.md` — translation style guide
+
+### 4. Verification
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+cd translation-agent
+./venv/bin/python -m unittest discover -s backend/tests -v
+```
 
 ---
 
@@ -227,9 +256,12 @@ chinese_novel_translator/
 │   │   ├── Sidebar.tsx           # Navigation sidebar
 │   │   └── HealthBanner.tsx      # Backend health check banner
 │   ├── contexts/
-│   │   └── LanguageContext.tsx    # i18n context provider
+│   │   ├── BackendHealthContext.tsx # Shared backend health state
+│   │   └── LanguageContext.tsx      # i18n context provider
 │   └── lib/
 │       ├── api.ts                # API client (typed)
+│       ├── download.ts           # Browser download helper
+│       ├── polling.ts            # Shared polling helper
 │       ├── types.ts              # TypeScript types (aligned with backend)
 │       └── i18n.ts               # Translation dictionary (KO/EN/ZH)
 ├── translation-agent/
@@ -240,8 +272,14 @@ chinese_novel_translator/
 │   │   │   ├── dataset.py        # Dataset management
 │   │   │   ├── translate.py      # Claude translation + annotations
 │   │   │   └── upload.py         # File/text upload pipeline
+│   │   ├── storage/              # Dataset repository + canonical data helpers
 │   │   ├── requirements.txt
 │   │   └── .env
+│   ├── scripts/
+│   │   ├── migrate_dataset_to_supabase.py
+│   │   └── migrate_glossary_to_canonical.py
+│   ├── supabase/
+│   │   └── schema.sql
 │   └── data/                     # Runtime data (not in git)
 │       ├── glossary.json
 │       ├── dataset_multinovel.jsonl

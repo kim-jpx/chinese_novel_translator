@@ -1,38 +1,42 @@
-"""
-Translation Agent Backend
-FastAPI server for the Chinese-Korean literary translation agent.
-"""
+"""Translation Agent Backend."""
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
-import json
+from __future__ import annotations
+
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from routers import glossary, dataset, translate, upload
+from backend.routers import dataset, glossary, translate, upload
+from backend.storage.config import (
+    get_cors_origins,
+    get_dataset_backend,
+    get_glossary_path,
+    is_supabase_configured,
+)
+from backend.storage.dataset_repository import (
+    DatasetBackendUnavailableError,
+    get_dataset_repository,
+)
+from backend.storage.glossary_store import count_glossary_terms
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(BACKEND_DIR / ".env")
 
 app = FastAPI(
     title="Translation Agent API",
     description="중한 문학 번역 에이전트 - 무협/선협/고장극/언정",
-    version="0.1.0"
+    version="0.2.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://192.168.64.2:3000",
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 app.include_router(glossary.router, prefix="/api/glossary", tags=["glossary"])
@@ -48,9 +52,21 @@ def root():
 
 @app.get("/api/health")
 def health():
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    dataset_backend = get_dataset_backend()
+    supabase_configured = is_supabase_configured()
+    supabase_connected = False
+    if dataset_backend == "supabase" and supabase_configured:
+        try:
+            supabase_connected = get_dataset_repository().ping()
+        except DatasetBackendUnavailableError:
+            supabase_connected = False
+
+    glossary_path = get_glossary_path()
     return {
-        "api_key_set": bool(api_key),
-        "dataset_exists": Path(os.getenv("DATASET_PATH", "../dataset_multinovel.jsonl")).exists(),
-        "glossary_exists": Path(os.getenv("GLOSSARY_PATH", "../glossary.json")).exists(),
+        "api_key_set": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "supabase_configured": supabase_configured,
+        "supabase_connected": supabase_connected,
+        "dataset_backend": dataset_backend,
+        "glossary_exists": glossary_path.exists(),
+        "glossary_terms": count_glossary_terms(),
     }

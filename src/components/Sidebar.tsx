@@ -9,24 +9,58 @@ import {
   Upload,
   Sparkles,
   Globe,
+  Activity,
+  LibraryBig,
+  GraduationCap,
 } from "lucide-react";
+import { useBackendHealth } from "@/contexts/BackendHealthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { LOCALE_FLAGS, LOCALE_LABELS, type Locale } from "@/lib/i18n";
+import ChineseScriptSwitcher from "@/components/ChineseScriptSwitcher";
 import { useState, useRef, useEffect } from "react";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { locale, setLocale, t } = useLanguage();
+  const { health, status } = useBackendHealth();
 
   const navItems = [
     { href: "/", label: t("nav.dashboard"), icon: LayoutDashboard },
     { href: "/glossary", label: t("nav.glossary"), icon: BookOpen },
     { href: "/translate", label: t("nav.translate"), icon: Languages },
+    { href: "/reader", label: t("nav.reader"), icon: LibraryBig },
+    { href: "/study", label: t("nav.study"), icon: GraduationCap },
     { href: "/upload", label: t("nav.upload"), icon: Upload },
   ];
 
+  const backendReady =
+    status === "ready" &&
+    !!health &&
+    health.api_key_set &&
+    health.supabase_configured &&
+    health.supabase_connected &&
+    health.glossary_exists;
+
+  const backendStatusText =
+    status === "loading"
+      ? t("sidebar.checking")
+      : status === "error"
+        ? t("sidebar.disconnected")
+        : backendReady
+          ? t("sidebar.connected")
+          : t("sidebar.attention");
+
+  const backendStatusClass =
+    status === "loading"
+      ? "text-slate-400"
+      : status === "error"
+        ? "text-red-300"
+        : backendReady
+          ? "text-emerald-400"
+          : "text-amber-300";
+
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-surface-light/80 backdrop-blur-xl border-r border-surface-border flex flex-col z-50">
+    <aside className="fixed left-0 top-0 z-50 hidden h-screen w-64 flex-col border-r border-surface-border bg-surface-light/80 backdrop-blur-xl lg:flex">
       {/* Logo */}
       <div className="px-6 py-6 border-b border-surface-border">
         <Link href="/" className="flex items-center gap-3 group">
@@ -83,12 +117,18 @@ export default function Sidebar() {
         {/* Language Switcher */}
         <LanguageSwitcher locale={locale} setLocale={setLocale} />
 
+        <ChineseScriptSwitcher />
+
         {/* Backend Status */}
         <div className="glass-card px-4 py-3 text-center">
           <p className="text-xs text-slate-500">{t("sidebar.backend")}</p>
-          <p className="text-xs text-emerald-400 font-mono mt-0.5">
-            {t("sidebar.connected")}
+          <p className={`text-xs font-mono mt-0.5 ${backendStatusClass}`}>
+            {backendStatusText}
           </p>
+          <div className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
+            <Activity className="w-3 h-3" />
+            <span>{health?.dataset_backend || "backend"}</span>
+          </div>
         </div>
       </div>
     </aside>

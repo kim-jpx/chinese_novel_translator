@@ -11,9 +11,13 @@ import {
   BarChart3,
   CheckCircle,
   Edit,
+  DatabaseZap,
+  KeyRound,
+  LibraryBig,
 } from "lucide-react";
 import { getBooks, getStats } from "@/lib/api";
-import type { BookInfo, DatasetStats } from "@/lib/types";
+import { useBackendHealth } from "@/contexts/BackendHealthContext";
+import type { BookInfo, DatasetStats, HealthCheck } from "@/lib/types";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 
@@ -23,24 +27,34 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { t } = useLanguage();
+  const { health, status: healthStatus, error: healthError } = useBackendHealth();
 
   useEffect(() => {
     async function loadData() {
-      try {
-        const [booksData, statsData] = await Promise.all([
-          getBooks(),
-          getStats(),
-        ]);
-        setBooks(booksData);
-        setStats(statsData);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : t("dashboard.loadError"));
-      } finally {
-        setLoading(false);
+      const [booksResult, statsResult] = await Promise.allSettled([
+        getBooks(),
+        getStats(),
+      ]);
+
+      const failures: string[] = [];
+
+      if (booksResult.status === "fulfilled") {
+        setBooks(booksResult.value);
+      } else {
+        failures.push(booksResult.reason instanceof Error ? booksResult.reason.message : "Could not load books");
       }
+
+      if (statsResult.status === "fulfilled") {
+        setStats(statsResult.value);
+      } else {
+        failures.push(statsResult.reason instanceof Error ? statsResult.reason.message : "Could not load stats");
+      }
+
+      setError(failures.length > 0 ? failures.join(" / ") : null);
+      setLoading(false);
     }
-    loadData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    void loadData();
   }, []);
 
   if (loading) return <DashboardSkeleton />;
@@ -70,11 +84,17 @@ export default function DashboardPage() {
         </div>
       )}
 
+      <SetupPanel
+        health={health}
+        healthStatus={healthStatus}
+        healthError={healthError}
+      />
+
       {/* Stats Cards — matched to backend DatasetStats */}
       <div className="grid grid-cols-4 gap-5">
         <StatCard icon={BookOpen} label={t("dashboard.totalBooks")} value={stats?.total_books ?? 0} color="indigo" />
         <StatCard icon={FileText} label={t("dashboard.totalChapters")} value={stats?.total_records ?? 0} color="emerald" />
-        <StatCard icon={BarChart3} label={t("dashboard.totalTerms")} value={stats?.records_with_zh ?? 0} color="sky" />
+        <StatCard icon={BarChart3} label={t("dashboard.totalTerms")} value={stats?.glossary_terms ?? 0} color="sky" />
         <StatCard icon={CheckCircle} label={t("dashboard.confirmed")} value={stats?.confirmed ?? 0} color="gold" badge={stats?.draft !== undefined && stats.draft > 0} />
       </div>
 
@@ -176,9 +196,9 @@ function StatCard({
 
 function BookCard({ book }: { book: BookInfo }) {
   const { t } = useLanguage();
-  const totalChapters = book.chapters_ko.length;
-  const withSource = book.chapters_zh.filter((c) => c && c !== "").length;
-  const progress = totalChapters > 0 ? Math.round((withSource / totalChapters) * 100) : 0;
+  const totalChapters = book.total_records;
+  const withSource = book.records_with_source_text;
+  const progress = book.source_coverage_percent;
 
   return (
     <div className="glass-card-hover p-5">
@@ -208,8 +228,90 @@ function BookCard({ book }: { book: BookInfo }) {
         <span className="text-xs text-slate-500 flex items-center gap-1">
           <Edit className="w-3 h-3" /> {withSource} / {totalChapters}
         </span>
+        <span className="text-xs text-slate-500">
+          {t("dashboard.confirmed")}: {book.confirmed}
+        </span>
       </div>
     </div>
+  );
+}
+
+function SetupPanel({
+  health,
+  healthStatus,
+  healthError,
+}: {
+  health: HealthCheck | null;
+  healthStatus: "loading" | "ready" | "error";
+  healthError: string | null;
+}) {
+  const { t } = useLanguage();
+
+  const setupItems = [
+    {
+      icon: KeyRound,
+      label: t("dashboard.setupApiKey"),
+      ok: !!health?.api_key_set,
+      description: t("dashboard.setupApiKeyDesc"),
+    },
+    {
+      icon: DatabaseZap,
+      label: t("dashboard.setupSupabase"),
+      ok: !!health?.supabase_configured && !!health?.supabase_connected,
+      description: t("dashboard.setupSupabaseDesc"),
+    },
+    {
+      icon: LibraryBig,
+      label: t("dashboard.setupGlossary"),
+      ok: !!health?.glossary_exists,
+      description: `${t("dashboard.setupGlossaryDesc")} ${
+        health?.glossary_terms ? `(${health.glossary_terms.toLocaleString()})` : ""
+      }`.trim(),
+    },
+  ];
+
+  return (
+    <section className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-white">{t("dashboard.setupTitle")}</h2>
+          <p className="text-sm text-slate-400 mt-1">{t("dashboard.setupSubtitle")}</p>
+        </div>
+        <span className="text-xs px-2 py-0.5 rounded-full border border-surface-border text-slate-300 bg-surface-lighter/60">
+          {health?.dataset_backend || "backend"}
+        </span>
+      </div>
+      {healthStatus === "error" ? (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">
+          {healthError || t("dashboard.setupLoadError")}
+        </div>
+      ) : healthStatus === "loading" ? (
+        <div className="rounded-xl border border-surface-border bg-surface-light/50 px-4 py-3 text-sm text-slate-400">
+          {t("dashboard.setupLoading")}
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-4">
+          {setupItems.map((item) => (
+            <div key={item.label} className="rounded-xl border border-surface-border bg-surface-light/50 p-4">
+              <div className="flex items-center justify-between">
+                <item.icon className={`w-4 h-4 ${item.ok ? "text-emerald-400" : "text-amber-300"}`} />
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                    item.ok
+                      ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                      : "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                  }`}
+                >
+                  {item.ok ? t("dashboard.setupReady") : t("dashboard.setupNeeded")}
+                </span>
+              </div>
+              <p className="text-sm text-white font-medium mt-3">{item.label}</p>
+              <p className="text-xs text-slate-500 mt-1">{item.description}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

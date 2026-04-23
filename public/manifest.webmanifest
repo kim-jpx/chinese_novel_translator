@@ -1,0 +1,36 @@
+{
+  "name": "중한 문학 번역 에이전트",
+  "short_name": "번역에이전트",
+  "description": "확정 번역본과 용어사전을 아이폰에서 읽는 개인용 번역 PWA",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "/reader/iphone",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0d1f",
+  "theme_color": "#0a0d1f",
+  "categories": ["books", "productivity", "education"],
+  "icons": [
+    {
+      "src": "/pwa/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "확정본 읽기",
+      "short_name": "리더",
+      "url": "/reader/iphone",
+      "description": "아이폰 리더 화면 열기"
+    },
+    {
+      "name": "용어사전",
+      "short_name": "용어",
+      "url": "/glossary",
+      "description": "용어사전 열기"
+    }
+  ]
+}

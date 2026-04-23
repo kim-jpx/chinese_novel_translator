@@ -1,100 +1,141 @@
-"""
-Glossary router - 용어사전 CRUD
-"""
+"""Glossary router - 용어사전 CRUD."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
-import json
-import os
-from pathlib import Path
-from datetime import datetime, timezone
+
+from backend.storage.dataset_repository import (
+    DatasetBackendUnavailableError,
+    get_dataset_repository,
+)
+from backend.storage.glossary_store import load_glossary, normalize_glossary_term, save_glossary
+from backend.storage.translation_memory import build_term_examples
 
 router = APIRouter()
-
-
-def get_glossary_path() -> Path:
-    return Path(os.getenv("GLOSSARY_PATH", "../../glossary.json"))
 
 
 class Term(BaseModel):
     term_zh: str
     term_ko: str
+    term_meaning_ko: str = ""
     pos: str
-    domain: str
-    policy: str  # 고정 / 조건부 / 검토중
+    domain: str = ""
+    policy: str
     notes: str = ""
     book: str = ""
     added_at: Optional[str] = None
     source_chapter: Optional[int] = None
 
 
-def load_glossary() -> List[dict]:
-    path = get_glossary_path()
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
+class TermExample(BaseModel):
+    record_id: str
+    book: str
+    chapter_ko: int
+    chapter_zh: str
+    matched_in: str
+    zh_snippet: str
+    ko_snippet: str
 
 
-def save_glossary(terms: List[dict]):
-    get_glossary_path().write_text(
-        json.dumps(terms, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-
-
-@router.get("/", response_model=List[Term])
+@router.get("", response_model=list[Term])
 def get_glossary(book: Optional[str] = None, domain: Optional[str] = None):
-    """전체 용어사전 조회. book/domain 필터 가능."""
     terms = load_glossary()
     if book:
-        terms = [t for t in terms if t.get("book") == book or t.get("domain") == book]
+        terms = [
+            term
+            for term in terms
+            if term.get("book") == book or term.get("domain") == book
+        ]
     if domain:
-        terms = [t for t in terms if t.get("domain") == domain]
+        terms = [term for term in terms if term.get("domain") == domain]
     return terms
 
 
-@router.post("/", response_model=Term)
+@router.post("", response_model=Term)
 def add_term(term: Term):
-    """새 용어 추가."""
     terms = load_glossary()
-    # 중복 확인
-    if any(t["term_zh"] == term.term_zh for t in terms):
+    if any(existing["term_zh"] == term.term_zh and (existing.get("book") or "") == (term.book or term.domain or "") for existing in terms):
         raise HTTPException(status_code=409, detail=f"이미 존재하는 용어: {term.term_zh}")
-    data = term.model_dump()
+
+    data = normalize_glossary_term(term.model_dump())
     data["added_at"] = datetime.now(timezone.utc).isoformat()
-    terms.append(data)
-    save_glossary(terms)
+    save_glossary(terms + [data])
     return data
+
+
+@router.get("/examples", response_model=list[TermExample])
+def get_term_examples(term_zh: str, book: Optional[str] = None, limit: int = 6):
+    term_zh_clean = term_zh.strip()
+    if not term_zh_clean:
+        raise HTTPException(status_code=400, detail="term_zh is required")
+
+    glossary = load_glossary()
+    matching_terms = [
+        term
+        for term in glossary
+        if term.get("term_zh", "") == term_zh_clean
+        and (not book or term.get("book") == book or term.get("domain") == book or not (term.get("book") or term.get("domain")))
+    ]
+    preferred_term = next(
+        (term for term in matching_terms if book and (term.get("book") == book or term.get("domain") == book)),
+        matching_terms[0]
+        if matching_terms
+        else {"term_zh": term_zh_clean, "term_ko": "", "term_meaning_ko": "", "book": book or ""},
+    )
+
+    try:
+        repo = get_dataset_repository()
+        if book:
+            records = repo.list_records(book_exact=book)
+        else:
+            records = repo.list_records()
+    except DatasetBackendUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    examples = build_term_examples(
+        records,
+        term_zh=term_zh_clean,
+        term_ko=str(preferred_term.get("term_ko", "") or "").strip(),
+        limit=max(1, min(limit, 12)),
+    )
+    return examples
 
 
 @router.put("/{term_zh}", response_model=Term)
 def update_term(term_zh: str, term: Term):
-    """용어 수정."""
     terms = load_glossary()
-    for i, t in enumerate(terms):
-        if t["term_zh"] == term_zh:
-            terms[i] = term.model_dump()
+    updated = normalize_glossary_term(term.model_dump())
+    for index, existing in enumerate(terms):
+        if existing["term_zh"] == term_zh and (existing.get("book") or existing.get("domain") or "") == (updated.get("book") or updated.get("domain") or ""):
+            terms[index] = updated
             save_glossary(terms)
-            return terms[i]
+            return updated
+
+    for index, existing in enumerate(terms):
+        if existing["term_zh"] == term_zh:
+            terms[index] = updated
+            save_glossary(terms)
+            return updated
+
     raise HTTPException(status_code=404, detail=f"용어 없음: {term_zh}")
 
 
 @router.delete("/{term_zh}")
 def delete_term(term_zh: str):
-    """용어 삭제."""
     terms = load_glossary()
-    original_len = len(terms)
-    terms = [t for t in terms if t["term_zh"] != term_zh]
-    if len(terms) == original_len:
+    filtered = [term for term in terms if term["term_zh"] != term_zh]
+    if len(filtered) == len(terms):
         raise HTTPException(status_code=404, detail=f"용어 없음: {term_zh}")
-    save_glossary(terms)
+    save_glossary(filtered)
     return {"deleted": term_zh}
 
 
 @router.get("/books")
 def get_books():
-    """작품 목록 조회."""
     terms = load_glossary()
-    books = list(set(t.get("domain", "") for t in terms if t.get("domain")))
+    books = {term.get("book") or term.get("domain") for term in terms if term.get("book") or term.get("domain")}
     return sorted(books)

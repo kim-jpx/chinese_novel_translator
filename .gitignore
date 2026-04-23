@@ -11,6 +11,8 @@
 
 # next.js
 /.next/
+/.next-build/
+/.next.stale-*/
 /out/
 
 # production
@@ -19,6 +21,12 @@
 # misc
 .DS_Store
 *.pem
+.cursor/
+translation-agent(2)/
+venv/
+.venv/
+**/__pycache__/
+*.py[cod]
 
 # debug
 npm-debug.log*
@@ -43,3 +51,9 @@ tools/scraper/교술_chapters/.chrome_profile/
 tools/scraper/교술_chapters/.chrome_tmp/
 tools/scraper/교술_chapters/debug_ch*.png
 tools/scraper/교술_chapters/error_screenshot.png
+
+# backend data artifacts
+translation-agent/data/*.bak
+translation-agent/data/*.tmp
+translation-agent/data/*.sqlite3
+translation-agent/data/*.db

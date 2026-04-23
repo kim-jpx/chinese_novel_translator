@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">중한 문학 번역 에이전트</title>
+  <desc id="desc">밤색 배경 위에 한국어와 중국어 문자를 담은 책 모양 앱 아이콘</desc>
+  <defs>
+    <linearGradient id="bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f172a"/>
+      <stop offset="0.48" stop-color="#111827"/>
+      <stop offset="1" stop-color="#064e3b"/>
+    </linearGradient>
+    <linearGradient id="page" x1="120" y1="132" x2="392" y2="396" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#c7d2fe"/>
+    </linearGradient>
+    <filter id="shadow" x="40" y="40" width="432" height="432" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="392" cy="120" r="72" fill="#10b981" opacity="0.16"/>
+  <circle cx="112" cy="404" r="96" fill="#6366f1" opacity="0.14"/>
+  <g filter="url(#shadow)">
+    <path d="M116 150c0-24 18-42 42-42h64c31 0 55 12 72 34 17-22 41-34 72-34h34c24 0 42 18 42 42v226c0 20-16 36-36 36h-48c-35 0-64 10-88 31a36 36 0 0 1-46 0c-24-21-53-31-88-31h-84c-20 0-36-16-36-36V150Z" fill="#0f172a" opacity="0.72"/>
+    <path d="M128 136c0-18 14-32 32-32h58c35 0 62 16 78 46v272c-18-26-45-40-80-40h-88V136Z" fill="url(#page)"/>
+    <path d="M296 150c16-30 43-46 78-46h26c18 0 32 14 32 32v246h-58c-35 0-62 14-78 40V150Z" fill="#e0f2fe"/>
+    <path d="M296 150v272" stroke="#0f172a" stroke-opacity="0.15" stroke-width="10"/>
+  </g>
+  <text x="168" y="244" fill="#111827" font-family="Georgia, serif" font-size="78" font-weight="700">한</text>
+  <text x="326" y="244" fill="#0f172a" font-family="Georgia, serif" font-size="78" font-weight="700">中</text>
+  <path d="M164 296h80M164 326h62M328 296h62M328 326h48" stroke="#475569" stroke-width="16" stroke-linecap="round" opacity="0.55"/>
+</svg>
