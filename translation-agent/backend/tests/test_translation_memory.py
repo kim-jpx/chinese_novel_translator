@@ -6,6 +6,7 @@ from backend.storage.translation_memory import (
     build_prompt_reference_examples,
     build_reference_examples,
     get_confirmed_records,
+    resolve_previous_record_id,
 )
 
 
@@ -99,6 +100,95 @@ class TranslationMemoryTests(unittest.TestCase):
         self.assertEqual(examples[0]["record_id"], "prev")
         self.assertEqual(examples[0]["source"], "previous")
         self.assertTrue(any(example["source"] == "term" for example in examples))
+
+    def test_resolve_previous_record_id_uses_current_chapter_ko(self):
+        records = [
+            {
+                "id": "ch9",
+                "book": "지존신의",
+                "chapter_ko": 9,
+                "chapter_zh": "9",
+                "status": "confirmed",
+                "zh_text": "九",
+                "ko_text_confirmed": "구",
+            },
+            {
+                "id": "ch10",
+                "book": "지존신의",
+                "chapter_ko": 10,
+                "chapter_zh": "10",
+                "status": "confirmed",
+                "zh_text": "十",
+                "ko_text_confirmed": "십",
+            },
+            {
+                "id": "ch12",
+                "book": "지존신의",
+                "chapter_ko": 12,
+                "chapter_zh": "12",
+                "status": "confirmed",
+                "zh_text": "十二",
+                "ko_text_confirmed": "십이",
+            },
+        ]
+
+        previous_record_id = resolve_previous_record_id(
+            records,
+            current_chapter_ko=11,
+            fallback_prev_record_id="ch12",
+        )
+
+        self.assertEqual(previous_record_id, "ch10")
+
+    def test_resolve_previous_record_id_falls_back_to_current_chapter_zh(self):
+        records = [
+            {
+                "id": "zh3",
+                "book": "지존신의",
+                "chapter_ko": 30,
+                "chapter_zh": "3",
+                "status": "confirmed",
+                "zh_text": "三",
+                "ko_text_confirmed": "삼",
+            },
+            {
+                "id": "zh5",
+                "book": "지존신의",
+                "chapter_ko": 50,
+                "chapter_zh": "5-6",
+                "status": "confirmed",
+                "zh_text": "五六",
+                "ko_text_confirmed": "오육",
+            },
+        ]
+
+        previous_record_id = resolve_previous_record_id(
+            records,
+            current_chapter_zh="7",
+        )
+
+        self.assertEqual(previous_record_id, "zh5")
+
+    def test_resolve_previous_record_id_returns_none_when_no_previous_exists(self):
+        records = [
+            {
+                "id": "ch2",
+                "book": "지존신의",
+                "chapter_ko": 2,
+                "chapter_zh": "2",
+                "status": "confirmed",
+                "zh_text": "二",
+                "ko_text_confirmed": "이",
+            },
+        ]
+
+        previous_record_id = resolve_previous_record_id(
+            records,
+            current_chapter_ko=1,
+            fallback_prev_record_id="ch2",
+        )
+
+        self.assertIsNone(previous_record_id)
 
     def test_prompt_builders_render_human_readable_sections(self):
         glossary_text = build_prompt_glossary_table(

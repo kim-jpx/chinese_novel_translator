@@ -1337,6 +1337,33 @@ class UploadMappingDirectionTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_align_parallel_segments_forwards_provider_override(self):
+        aligned_zh_text = "这是整理后的正文。" * 12
+        aligned_ko_text = "이것은 정리된 번역문이다. " * 8
+        raw_zh_text = "这是整理前的正文。 " * 12
+        raw_ko_text = "이것은 정리 전 번역문이다. " * 8
+        fake_response = unittest.mock.Mock()
+        fake_response.text = (
+            '{"zh_text":"'
+            + aligned_zh_text
+            + '","ko_text":"'
+            + aligned_ko_text
+            + '"}'
+        )
+
+        with patch("routers.upload.generate_text_sync", return_value=fake_response) as generate_mock:
+            aligned_zh, aligned_ko = upload.align_parallel_segments(
+                raw_zh_text,
+                raw_ko_text,
+                requested_provider="openai",
+                requested_model="gpt-5-mini",
+            )
+
+        self.assertEqual(aligned_zh, aligned_zh_text)
+        self.assertEqual(aligned_ko, aligned_ko_text.strip())
+        self.assertEqual(generate_mock.call_args.kwargs["requested_provider"], "openai")
+        self.assertEqual(generate_mock.call_args.kwargs["requested_model"], "gpt-5-mini")
+
 
 if __name__ == "__main__":
     unittest.main()

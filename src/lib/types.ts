@@ -1,6 +1,15 @@
 // Types for the Chinese Novel Translation Agent
 // Aligned with backend Pydantic models (translation-agent/backend/routers/)
 
+export type LlmProvider = "anthropic" | "openai" | "gemini";
+
+export interface LlmProviderStatus {
+  label: string;
+  configured: boolean;
+  default_model: string;
+  is_default: boolean;
+}
+
 // ===== Glossary (glossary.py - Term model) =====
 export interface GlossaryTerm {
   term_zh: string;
@@ -140,7 +149,11 @@ export interface TranslationRequest {
   book?: string;
   genre?: string[];
   era_profile: string;
+  provider?: LlmProvider | string;
+  model?: string;
   prev_chapter_id?: string;
+  current_chapter_ko?: number;
+  current_chapter_zh?: string;
   with_annotations: boolean;
   with_cultural_check: boolean;
 }
@@ -199,6 +212,7 @@ export interface TranslationResponse {
   glossary_hits: TranslateGlossaryHit[];
   reference_examples: TranslateReferenceExample[];
   context_summary: TranslationContextSummary;
+  provider: LlmProvider | string;
   model: string;
 }
 
@@ -214,6 +228,7 @@ export interface SyntaxAlignPair {
 
 export interface SyntaxAlignResponse {
   pairs: SyntaxAlignPair[];
+  provider: LlmProvider | string;
   model: string;
 }
 
@@ -223,10 +238,13 @@ export interface SentenceExplainRequest {
   book?: string;
   genre?: string[];
   era_profile?: string;
+  provider?: LlmProvider | string;
+  model?: string;
 }
 
 export interface SentenceExplainResponse {
   explanation: string;
+  provider: LlmProvider | string;
   model: string;
 }
 
@@ -237,10 +255,13 @@ export interface ToneRewriteRequest {
   book?: string;
   genre?: string[];
   era_profile?: string;
+  provider?: LlmProvider | string;
+  model?: string;
 }
 
 export interface ToneRewriteResponse {
   rewritten: string;
+  provider: LlmProvider | string;
   model: string;
 }
 
@@ -250,6 +271,8 @@ export interface DraftVerifyRequest {
   book?: string;
   genre?: string[];
   era_profile?: string;
+  provider?: LlmProvider | string;
+  model?: string;
 }
 
 export interface DraftVerifyCategory {
@@ -276,6 +299,7 @@ export interface DraftVerifyResponse {
   categories: DraftVerifyCategory[];
   issues: DraftVerifyIssue[];
   strengths: string[];
+  provider: LlmProvider | string;
   model: string;
 }
 
@@ -379,6 +403,9 @@ export interface PromoteCandidatesResult {
 // ===== Health =====
 export interface HealthCheck {
   api_key_set: boolean;
+  default_provider: LlmProvider | string;
+  available_providers: Array<LlmProvider | string>;
+  providers: Record<string, LlmProviderStatus>;
   supabase_configured: boolean;
   supabase_connected: boolean;
   dataset_backend: string;

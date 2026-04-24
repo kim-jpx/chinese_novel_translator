@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.routers import dataset, glossary, translate, upload
+from backend.llm import any_provider_configured, configured_providers, default_provider, provider_health
 from backend.storage.config import (
     get_cors_origins,
     get_dataset_backend,
@@ -63,7 +63,10 @@ def health():
 
     glossary_path = get_glossary_path()
     return {
-        "api_key_set": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "api_key_set": any_provider_configured(),
+        "default_provider": default_provider(),
+        "available_providers": configured_providers(),
+        "providers": provider_health(),
         "supabase_configured": supabase_configured,
         "supabase_connected": supabase_connected,
         "dataset_backend": dataset_backend,

@@ -246,13 +246,18 @@ function SetupPanel({
   healthError: string | null;
 }) {
   const { t } = useLanguage();
+  const configuredProviderLabels = Object.entries(health?.providers || {})
+    .filter(([, provider]) => provider.configured)
+    .map(([, provider]) => provider.label);
 
   const setupItems = [
     {
       icon: KeyRound,
       label: t("dashboard.setupApiKey"),
       ok: !!health?.api_key_set,
-      description: t("dashboard.setupApiKeyDesc"),
+      description: configuredProviderLabels.length > 0
+        ? `${t("dashboard.setupApiKeyDesc")} (${configuredProviderLabels.join(", ")})`
+        : t("dashboard.setupApiKeyDesc"),
     },
     {
       icon: DatabaseZap,

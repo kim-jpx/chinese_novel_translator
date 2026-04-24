@@ -318,15 +318,21 @@ export async function translate(req: TranslationRequest) {
   }, TRANSLATE_TIMEOUT_MS);
 }
 
-export async function translateTest() {
-  return fetchApi<{ ok: boolean; response: string }>("/api/translate/test", {
-    method: "POST",
-  });
+export async function translateTest(body?: { provider?: string; model?: string; prompt?: string }) {
+  return fetchApi<{ ok: boolean; provider: string; model: string; response: string }>(
+    "/api/translate/test",
+    {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }
+  );
 }
 
 export async function alignSyntax(body: {
   source_text: string;
   translation_text: string;
+  provider?: string;
+  model?: string;
 }) {
   return fetchApi<SyntaxAlignResponse>("/api/translate/syntax-align", {
     method: "POST",
@@ -439,7 +445,10 @@ export async function adjustAlignmentReviewBoundary(
   );
 }
 
-export async function applyAlignmentReview(reviewId: string, body?: { proposed_ko_text?: string }) {
+export async function applyAlignmentReview(
+  reviewId: string,
+  body?: { proposed_ko_text?: string; provider?: string; model?: string }
+) {
   return fetchApi<DatasetRecord>(
     `/api/upload/alignment-reviews/${encodeURIComponent(reviewId)}/apply`,
     {
@@ -462,6 +471,8 @@ export async function uploadText(body: {
   chapter_zh?: string;
   mapping_direction?: MappingDirection;
   script: string;
+  provider?: string;
+  model?: string;
 }) {
   return fetchApi<UploadResult>("/api/upload/text", {
     method: "POST",
@@ -476,7 +487,14 @@ export async function promoteUploadCandidates(body: { book?: string; chapter_ko?
   });
 }
 
-export async function extractUploadCandidates(body: { record_id?: string; record_ids?: string[]; book?: string; chapter_ko?: number }) {
+export async function extractUploadCandidates(body: {
+  record_id?: string;
+  record_ids?: string[];
+  book?: string;
+  chapter_ko?: number;
+  provider?: string;
+  model?: string;
+}) {
   return fetchApi<ExtractCandidatesJobStart>("/api/upload/extract-candidates", {
     method: "POST",
     body: JSON.stringify(body),

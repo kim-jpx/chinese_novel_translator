@@ -218,14 +218,14 @@ const translations = {
     zh: "无法加载数据",
   },
   "dashboard.apiKeyTitle": {
-    ko: "Anthropic API 키",
-    en: "Anthropic API Key",
-    zh: "Anthropic API 密钥",
+    ko: "LLM API 키",
+    en: "LLM API Keys",
+    zh: "LLM API 密钥",
   },
   "dashboard.apiKeyPlaceholder": {
-    ko: "sk-ant-... 형태의 키를 입력하세요",
-    en: "Enter key in sk-ant-... format",
-    zh: "输入 sk-ant-... 形式的密钥",
+    ko: "ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 중 필요한 값을 설정하세요",
+    en: "Configure ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY as needed",
+    zh: "按需配置 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY",
   },
   "dashboard.apiKeySave": {
     ko: "키 저장",
@@ -258,14 +258,14 @@ const translations = {
     zh: "在不将密钥保存到浏览器的前提下检查服务器环境",
   },
   "dashboard.setupApiKey": {
-    ko: "Anthropic API 키",
-    en: "Anthropic API Key",
-    zh: "Anthropic API 密钥",
+    ko: "LLM 제공자 키",
+    en: "LLM Provider Keys",
+    zh: "LLM 提供方密钥",
   },
   "dashboard.setupApiKeyDesc": {
-    ko: "백엔드 환경 변수에 설정되어 있어야 합니다",
-    en: "Must be configured in backend environment variables",
-    zh: "必须配置在后端环境变量中",
+    ko: "Anthropic, OpenAI, Gemini 중 하나 이상이 백엔드 환경 변수에 설정되어 있어야 합니다",
+    en: "At least one of Anthropic, OpenAI, or Gemini must be configured in backend environment variables",
+    zh: "后端环境变量中至少要配置 Anthropic、OpenAI、Gemini 其中之一",
   },
   "dashboard.setupSupabase": {
     ko: "Supabase 데이터셋",
@@ -670,6 +670,46 @@ const translations = {
     ko: "장르",
     en: "Genre",
     zh: "类型",
+  },
+  "translate.provider": {
+    ko: "AI 제공자",
+    en: "AI Provider",
+    zh: "AI 提供方",
+  },
+  "translate.providerAuto": {
+    ko: "자동",
+    en: "Auto",
+    zh: "自动",
+  },
+  "translate.providerHint": {
+    ko: "자동은 백엔드 기본 제공자를 사용합니다. 모델 입력을 비우면 제공자별 기본 모델을 사용합니다.",
+    en: "Auto uses the backend default provider. Leave model blank to use the provider default model.",
+    zh: "自动会使用后端默认提供方。模型留空时会使用该提供方的默认模型。",
+  },
+  "translate.model": {
+    ko: "모델",
+    en: "Model",
+    zh: "模型",
+  },
+  "translate.modelPlaceholder": {
+    ko: "비워두면 제공자 기본 모델 사용",
+    en: "Leave blank to use the provider default model",
+    zh: "留空则使用该提供方默认模型",
+  },
+  "provider.claude": {
+    ko: "Claude",
+    en: "Claude",
+    zh: "Claude",
+  },
+  "provider.gpt": {
+    ko: "GPT",
+    en: "GPT",
+    zh: "GPT",
+  },
+  "provider.gemini": {
+    ko: "Gemini",
+    en: "Gemini",
+    zh: "Gemini",
   },
   "translate.era": {
     ko: "시대 배경",
@@ -3026,9 +3066,9 @@ const translations = {
     zh: "需要检查后端配置",
   },
   "health.issueApiKey": {
-    ko: "API 키 없음",
-    en: "API key missing",
-    zh: "缺少 API 密钥",
+    ko: "LLM 제공자 키 없음",
+    en: "No LLM provider key configured",
+    zh: "未配置 LLM 提供方密钥",
   },
   "health.issueSupabaseConfig": {
     ko: "Supabase 설정 없음",

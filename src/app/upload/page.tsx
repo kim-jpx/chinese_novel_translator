@@ -54,6 +54,7 @@ import type {
   BookInfo,
   UploadConflict,
   AlignmentReview,
+  LlmProvider,
 } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -90,6 +91,21 @@ const TONE_PRESETS: Array<{ id: TonePresetId; labelKey: TranslationKey }> = [
   { id: "banmal", labelKey: "upload.tonePresetBanmal" },
   { id: "literary", labelKey: "upload.tonePresetLiterary" },
 ];
+
+const DEV_MODE = process.env.NODE_ENV !== "production";
+
+const DEV_LLM_PROVIDER_KEYS: Array<{ value: "auto" | LlmProvider; key: TranslationKey }> = [
+  { value: "auto", key: "translate.providerAuto" },
+  { value: "anthropic", key: "provider.claude" },
+  { value: "openai", key: "provider.gpt" },
+  { value: "gemini", key: "provider.gemini" },
+];
+
+const DEV_LLM_MODEL_PRESETS: Record<LlmProvider, string[]> = {
+  anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  openai: ["gpt-5", "gpt-5-mini"],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
+};
 
 function makeEditableRowId(recordId: string) {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -177,6 +193,7 @@ function makeSavedVerifyReport(result: DraftVerifyResponse): SavedVerifyReport {
     categories: result.categories.map((category) => ({ ...category })),
     issues: result.issues.map((issue) => ({ ...issue })),
     strengths: [...result.strengths],
+    provider: result.provider,
     model: result.model,
   };
 }
@@ -574,6 +591,84 @@ function MetadataFields({
   );
 }
 
+function DevLlmOverridePanel({
+  provider,
+  setProvider,
+  model,
+  setModel,
+}: {
+  provider: "auto" | LlmProvider;
+  setProvider: Dispatch<SetStateAction<"auto" | LlmProvider>>;
+  model: string;
+  setModel: Dispatch<SetStateAction<string>>;
+}) {
+  const { t } = useLanguage();
+  const providerKey = DEV_LLM_PROVIDER_KEYS.find((entry) => entry.value === provider)?.key ?? "translate.providerAuto";
+
+  if (!DEV_MODE) return null;
+
+  return (
+    <div className="glass-card border border-indigo-500/20 bg-indigo-500/5 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-indigo-300/80">Dev Only</p>
+          <h2 className="mt-1 text-sm font-semibold text-white">LLM Override</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Upload job, 후보 재추출, 정렬 적용, 편집기 AI 도구에 같은 override를 적용합니다.
+          </p>
+        </div>
+        <span className="rounded-full border border-indigo-500/20 bg-indigo-500/10 px-3 py-1 text-[11px] font-medium text-indigo-200">
+          {t(providerKey)}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <div>
+          <label className="mb-2 block text-sm font-medium text-slate-200">{t("translate.provider")}</label>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {DEV_LLM_PROVIDER_KEYS.map((entry) => (
+              <button
+                key={entry.value}
+                type="button"
+                onClick={() => setProvider(entry.value)}
+                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  provider === entry.value
+                    ? "border-indigo-500/40 bg-indigo-500/20 text-white"
+                    : "border-surface-border bg-surface text-slate-300 hover:border-indigo-500/30 hover:text-white"
+                }`}
+              >
+                {t(entry.key)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-slate-500">{t("translate.providerHint")}</p>
+        </div>
+
+        <div>
+          <label className="mb-2 block text-sm font-medium text-slate-200">{t("translate.model")}</label>
+          <input
+            type="text"
+            list="upload-dev-llm-model-options"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={provider === "auto"}
+            placeholder={provider === "auto" ? t("translate.providerAuto") : t("translate.modelPlaceholder")}
+            className="w-full rounded-lg border border-surface-border bg-surface px-4 py-2.5 text-sm text-white placeholder:text-slate-600 focus:border-indigo-500/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <datalist id="upload-dev-llm-model-options">
+            {provider !== "auto" && DEV_LLM_MODEL_PRESETS[provider].map((entry) => (
+              <option key={entry} value={entry} />
+            ))}
+          </datalist>
+          <p className="mt-2 text-xs text-slate-500">
+            {provider === "auto" ? "자동 선택에서는 backend 기본 모델을 사용합니다." : "비우면 선택한 provider의 기본 모델을 사용합니다."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ──────────────────────────────────────────────
 // Main page
 // ──────────────────────────────────────────────
@@ -590,6 +685,8 @@ export default function UploadPage() {
   const [mappingDirection, setMappingDirection] = useState<MappingDirection>("zh_to_ko");
   const [resegmentKoByZh, setResegmentKoByZh] = useState(true);
   const [script, setScript] = useState<"unknown" | "simplified" | "traditional">("unknown");
+  const [llmProvider, setLlmProvider] = useState<"auto" | LlmProvider>("auto");
+  const [llmModel, setLlmModel] = useState("");
   const [uploading, setUploading] = useState(false);
   const [autoPromote, setAutoPromote] = useState(true);
   const [promoting, setPromoting] = useState(false);
@@ -644,6 +741,19 @@ export default function UploadPage() {
   const prevFocusedBookRef = useRef<string | null>(null);
   const reviewBookManuallySelectedRef = useRef(false);
   const { t, locale } = useLanguage();
+  const buildLlmOverrides = useCallback((): { provider?: LlmProvider; model?: string } => {
+    if (llmProvider === "auto") return {};
+    const trimmedModel = llmModel.trim();
+    return {
+      provider: llmProvider,
+      ...(trimmedModel ? { model: trimmedModel } : {}),
+    };
+  }, [llmModel, llmProvider]);
+  const appendLlmOverridesToFormData = useCallback((formData: FormData) => {
+    const overrides = buildLlmOverrides();
+    if (overrides.provider) formData.append("provider", overrides.provider);
+    if (overrides.model) formData.append("model", overrides.model);
+  }, [buildLlmOverrides]);
   const uploadStatusLabel = (status: string) => {
     if (status === "conflict_pending") return t("upload.statusConflictPending");
     if (status === "alignment_review_needed") return t("upload.statusAlignmentReviewNeeded");
@@ -1245,8 +1355,8 @@ export default function UploadPage() {
     try {
       const started = await extractUploadCandidates(
         uniqueTargets.length === 1
-          ? { record_id: uniqueTargets[0].id }
-          : { record_ids: uniqueTargets.map((record) => record.id) }
+          ? { record_id: uniqueTargets[0].id, ...buildLlmOverrides() }
+          : { record_ids: uniqueTargets.map((record) => record.id), ...buildLlmOverrides() }
       );
       const extractSummary = await waitForExtractResult(started.job_id);
       const promotedResults = await Promise.all(
@@ -1305,6 +1415,7 @@ export default function UploadPage() {
       setExtracting(false);
     }
   }, [
+    buildLlmOverrides,
     formatExtractResultMessage,
     loadBookRecords,
     loadBookSummaries,
@@ -1369,6 +1480,7 @@ export default function UploadPage() {
         formData.append("mapping_direction", mappingDirection);
         formData.append("resegment_ko_by_zh", String(resegmentKoByZh));
         formData.append("script", script);
+        appendLlmOverridesToFormData(formData);
         const started = await uploadFile(formData);
         const res = started.status === "queued" ? await waitForUploadResult(started.id) : started;
         if (autoPromote && res.new_terms.length > 0) {
@@ -1421,6 +1533,7 @@ export default function UploadPage() {
           formData.append("mapping_direction", mappingDirection);
           formData.append("resegment_ko_by_zh", String(resegmentKoByZh));
           formData.append("script", script);
+          appendLlmOverridesToFormData(formData);
           const started = await uploadFile(formData);
           lastResult = started.status === "queued" ? await waitForUploadResult(started.id) : started;
           lastResult.new_terms.forEach((term) => aggregatedTerms.add(term));
@@ -1511,6 +1624,7 @@ export default function UploadPage() {
         chapter_zh: chapterZh.trim() || undefined,
         mapping_direction: mappingDirection,
         script,
+        ...buildLlmOverrides(),
       });
       const res = started.status === "queued" ? await waitForUploadResult(started.id) : started;
       if (autoPromote && res.new_terms.length > 0) {
@@ -1614,6 +1728,7 @@ export default function UploadPage() {
             era_profile: record.era_profile || "ancient",
             with_annotations: false,
             with_cultural_check: false,
+            ...buildLlmOverrides(),
           });
           const translated = sanitizeKoreanTranslationPunctuation(response.translated || "").trim();
           if (!translated) {
@@ -1965,9 +2080,12 @@ export default function UploadPage() {
     try {
       const updated = await applyAlignmentReview(
         review.review_id,
-        proposedOverride && proposedOverride !== review.proposed_ko_text
-          ? { proposed_ko_text: proposedOverride }
-          : undefined,
+        {
+          ...(proposedOverride && proposedOverride !== review.proposed_ko_text
+            ? { proposed_ko_text: proposedOverride }
+            : {}),
+          ...buildLlmOverrides(),
+        },
       );
       upsertLocalDataset(updated);
       await loadBookSummaries();
@@ -2449,6 +2567,13 @@ export default function UploadPage() {
         })}
       </div>
 
+      <DevLlmOverridePanel
+        provider={llmProvider}
+        setProvider={setLlmProvider}
+        model={llmModel}
+        setModel={setLlmModel}
+      />
+
       {/* ───── Tab Card ───── */}
       <div className="glass-card overflow-hidden">
         {/* Tab bar */}
@@ -2881,9 +3006,9 @@ export default function UploadPage() {
                   </button>
                 </div>
                 {!collapsedBooks.has(bk) && (
-                  <div className="border-t border-surface-border">
+                  <div className="border-t border-surface-border overflow-y-auto max-h-[480px]">
                     <table className="w-full">
-                      <thead>
+                      <thead className="sticky top-0 z-10 bg-surface-light">
                         <tr className="border-b border-surface-border/50">
                           <th className="text-left px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-24">{t("upload.chapter")}</th>
                           <th className="text-center px-5 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider w-28">{t("upload.sourceZh")}</th>
@@ -3211,6 +3336,8 @@ export default function UploadPage() {
           onRetranslate={handleRetranslateRecord}
           extracting={extracting}
           retranslating={retranslatingRecordIds.has(previewEntry.id)}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
         />
       )}
       {editingBookTitle && (
@@ -3875,6 +4002,8 @@ function PreviewModal({
   onRetranslate,
   extracting,
   retranslating,
+  llmProvider,
+  llmModel,
 }: {
   entry: DatasetRecord;
   onClose: () => void;
@@ -3890,6 +4019,8 @@ function PreviewModal({
   onRetranslate: (record: DatasetRecord) => Promise<DatasetRecord | undefined>;
   extracting: boolean;
   retranslating: boolean;
+  llmProvider: "auto" | LlmProvider;
+  llmModel: string;
 }) {
   const { t, locale } = useLanguage();
   const dateLocale = locale === "zh" ? "zh-CN" : locale === "en" ? "en-US" : "ko-KR";
@@ -3939,6 +4070,14 @@ function PreviewModal({
   const [verifyResult, setVerifyResult] = useState<DraftVerifyResponse | null>(null);
   const [verifyError, setVerifyError] = useState("");
   const sourceSummary = buildSourceSummary(sourceText || "");
+  const buildLlmOverrides = (): { provider?: LlmProvider; model?: string } => {
+    if (llmProvider === "auto") return {};
+    const trimmedModel = llmModel.trim();
+    return {
+      provider: llmProvider,
+      ...(trimmedModel ? { model: trimmedModel } : {}),
+    };
+  };
 
   const setSourceTextValue = (value: string) => {
     sourceTextRef.current = value;
@@ -4623,6 +4762,7 @@ function PreviewModal({
         book: entry.book || entry.book_ko || entry.book_zh || undefined,
         genre: entry.genre || [],
         era_profile: entry.era_profile || "ancient",
+        ...buildLlmOverrides(),
       });
       setVerifyResult(result);
     } catch (err) {
@@ -4645,6 +4785,7 @@ function PreviewModal({
         era_profile: entry.era_profile || "ancient",
         with_annotations: false,
         with_cultural_check: false,
+        ...buildLlmOverrides(),
       });
       const translated = sanitizeKoreanTranslationPunctuation(response.translated).trim();
       if (!translated) return;
@@ -4674,6 +4815,7 @@ function PreviewModal({
         book: entry.book || entry.book_ko || entry.book_zh || undefined,
         genre: entry.genre || [],
         era_profile: entry.era_profile || "ancient",
+        ...buildLlmOverrides(),
       });
       const rewritten = sanitizeKoreanTranslationPunctuation(response.rewritten).trim();
       if (!rewritten) return;
@@ -4702,6 +4844,7 @@ function PreviewModal({
         book: entry.book || entry.book_ko || entry.book_zh || undefined,
         genre: entry.genre || [],
         era_profile: entry.era_profile || "ancient",
+        ...buildLlmOverrides(),
       });
       const explanation = response.explanation.trim();
       if (explanation) {
@@ -4947,7 +5090,7 @@ function PreviewModal({
                             .join("\n");
                           return (
                           <div key={rowKey} className="rounded-xl border border-surface-border bg-surface/70 p-3">
-                            <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                            <div className="mb-3 flex flex-wrap items-start gap-2">
                               <p className="font-mono text-[11px] text-slate-500">#{index + 1}</p>
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <button

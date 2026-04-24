@@ -15,6 +15,7 @@ import type {
   UploadResult,
   DatasetRecord,
   GlossaryTerm,
+  LlmProvider,
 } from "@/lib/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 import type { TranslationKey } from "@/lib/i18n";
@@ -39,6 +40,19 @@ const ERA_KEYS: { value: string; key: TranslationKey }[] = [
   { value: "unknown", key: "translate.eraUnknown" },
 ];
 
+const PROVIDER_KEYS: Array<{ value: "auto" | LlmProvider; key: TranslationKey }> = [
+  { value: "auto", key: "translate.providerAuto" },
+  { value: "anthropic", key: "provider.claude" },
+  { value: "openai", key: "provider.gpt" },
+  { value: "gemini", key: "provider.gemini" },
+];
+
+const MODEL_PRESETS: Record<LlmProvider, string[]> = {
+  anthropic: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  openai: ["gpt-5", "gpt-5-mini"],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
+};
+
 export default function TranslatePage() {
   const [books, setBooks] = useState<BookInfo[]>([]);
   const [text, setText] = useState("");
@@ -46,6 +60,8 @@ export default function TranslatePage() {
   const [bookZh, setBookZh] = useState("");
   const [chapterKo, setChapterKo] = useState("");
   const [chapterZh, setChapterZh] = useState("");
+  const [provider, setProvider] = useState<"auto" | LlmProvider>("auto");
+  const [model, setModel] = useState("");
   const [genres, setGenres] = useState<string[]>([]);
   const [era, setEra] = useState("ancient");
   const [withAnnotations, setWithAnnotations] = useState(true);
@@ -100,6 +116,19 @@ export default function TranslatePage() {
     if (source === "term") return t("translate.referenceSourceTerm");
     if (source === "similar") return t("translate.referenceSourceSimilar");
     return t("translate.referenceSourceRecent");
+  };
+  const providerLabel = (value: string) => {
+    if (value === "anthropic") return t("provider.claude");
+    if (value === "openai") return t("provider.gpt");
+    if (value === "gemini") return t("provider.gemini");
+    if (value === "auto") return t("translate.providerAuto");
+    return value;
+  };
+  const parsePositiveInt = (value: string): number | undefined => {
+    const match = value.trim().match(/\d+/);
+    if (!match) return undefined;
+    const parsed = Number.parseInt(match[0], 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
   };
   const excerpt = (value: string, maxChars: number = 120) => {
     const cleaned = value.replace(/\s+/g, " ").trim();
@@ -181,7 +210,19 @@ export default function TranslatePage() {
     if (!text.trim()) return;
     setLoading(true); setError(null); setResult(null); setSaveNotice(null); setSaveWarning(null);
     try {
-      const req: TranslationRequest = { text, book: book || undefined, genre: genres, era_profile: era, prev_chapter_id: prevChapterId || undefined, with_annotations: withAnnotations, with_cultural_check: withCulturalCheck };
+      const req: TranslationRequest = {
+        text,
+        book: book || undefined,
+        genre: genres,
+        era_profile: era,
+        provider: provider === "auto" ? undefined : provider,
+        model: provider === "auto" ? undefined : (model.trim() || undefined),
+        prev_chapter_id: prevChapterId || undefined,
+        current_chapter_ko: parsePositiveInt(chapterKo),
+        current_chapter_zh: chapterZh.trim() || undefined,
+        with_annotations: withAnnotations,
+        with_cultural_check: withCulturalCheck,
+      };
       const res = await translate(req);
       setResult(res);
     } catch (e) {
@@ -394,6 +435,45 @@ export default function TranslatePage() {
             </div>
 
             <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">{t("translate.provider")}</label>
+              <div className="flex flex-wrap gap-2">
+                {PROVIDER_KEYS.map((entry) => (
+                  <button
+                    key={entry.value}
+                    type="button"
+                    onClick={() => setProvider(entry.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                      provider === entry.value
+                        ? "bg-sky-500/20 text-sky-200 border border-sky-500/30"
+                        : "bg-surface-lighter border border-surface-border text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    {t(entry.key)}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-slate-500">{t("translate.providerHint")}</p>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">{t("translate.model")}</label>
+              <input
+                type="text"
+                list={provider === "auto" ? undefined : `translate-model-options-${provider}`}
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={t("translate.modelPlaceholder")}
+                disabled={provider === "auto"}
+                className="w-full px-4 py-2.5 bg-surface border border-surface-border rounded-lg text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              />
+              {provider !== "auto" && (
+                <datalist id={`translate-model-options-${provider}`}>
+                  {MODEL_PRESETS[provider].map((entry) => (<option key={entry} value={entry} />))}
+                </datalist>
+              )}
+            </div>
+
+            <div>
               <label className="text-sm font-medium text-slate-300 mb-2 block">{t("translate.genre")}</label>
               <div className="flex flex-wrap gap-2">
                 {GENRE_KEYS.map((g) => (
@@ -488,7 +568,9 @@ export default function TranslatePage() {
 	                    >
                       {savingDraft ? t("translate.savingDraft") : t("translate.saveDraft")}
                     </button>
-                    <span className="text-xs text-slate-500 font-mono">{result.model}</span>
+                    <span className="text-xs text-slate-500 font-mono">
+                      {providerLabel(result.provider)} / {result.model}
+                    </span>
                   </div>
                 </div>
                 <div className="p-4 bg-surface rounded-xl border border-surface-border">

@@ -13,11 +13,10 @@ import uuid
 from typing import Optional, List, Literal
 import urllib.request
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import anthropic
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel, Field
 
+from backend.llm import generate_text_sync
 from backend.storage.alignment_batch_store import SQLiteAlignmentBatchStore
 from backend.storage.alignment_review_store import (
     SQLiteAlignmentReviewStore,
@@ -46,7 +45,6 @@ from backend.storage.glossary_store import (
 from backend.storage.job_store import SQLiteJobStore
 
 router = APIRouter()
-ANTHROPIC_TIMEOUT_SECONDS = int(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "25"))
 JOB_TTL_SECONDS = int(os.getenv("UPLOAD_JOB_TTL_SECONDS", "3600"))
 MAX_JOB_ENTRIES = int(os.getenv("UPLOAD_JOB_MAX_ENTRIES", "200"))
 JOB_TYPE_UPLOAD = "upload"
@@ -55,12 +53,6 @@ JOB_STORE = SQLiteJobStore(get_job_store_path())
 ALIGNMENT_REVIEW_STORE = SQLiteAlignmentReviewStore(get_job_store_path())
 ALIGNMENT_BATCH_STORE = SQLiteAlignmentBatchStore(get_job_store_path())
 ALIGNMENT_CONFIDENCE_THRESHOLD = float(os.getenv("ALIGNMENT_CONFIDENCE_THRESHOLD", "0.78"))
-
-
-def anthropic_create_with_timeout(client: anthropic.Anthropic, **kwargs):
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(client.messages.create, **kwargs)
-        return future.result(timeout=ANTHROPIC_TIMEOUT_SECONDS)
 
 # 작품별 원문 소스 매핑
 BOOK_SOURCE_CATALOG = [
@@ -162,7 +154,12 @@ class AlignmentReviewUpdateRequest(BaseModel):
     end_reason: str | None = None
 
 
-class AlignmentReviewApplyRequest(BaseModel):
+class UploadLlmOptionsRequest(BaseModel):
+    provider: str = ""
+    model: str = ""
+
+
+class AlignmentReviewApplyRequest(UploadLlmOptionsRequest):
     proposed_ko_text: str | None = None
 
 
@@ -300,6 +297,48 @@ def _join_alignment_units(units: list[str]) -> str:
     return clean_chapter_text("\n".join(unit.strip() for unit in units if unit.strip()), "ko")
 
 
+def _parse_llm_json(raw_text: str, expected: Literal["array", "object"]):
+    payload = str(raw_text or "").strip()
+    if not payload:
+        return None
+
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", payload, re.S | re.I)
+    if fence_match:
+        payload = fence_match.group(1).strip()
+
+    pattern = r"\[(?:.|\n)*\]" if expected == "array" else r"\{(?:.|\n)*\}"
+    match = re.search(pattern, payload)
+    candidate = match.group(0) if match else payload
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        return None
+
+    if expected == "array":
+        return parsed if isinstance(parsed, list) else None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _generate_upload_llm_text(
+    prompt: str,
+    *,
+    action: str,
+    max_output_tokens: int,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> str:
+    response = generate_text_sync(
+        task="upload",
+        action=action,
+        user_prompt=prompt,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        max_output_tokens=max_output_tokens,
+        temperature=0,
+    )
+    return response.text.strip()
+
+
 def _persist_created_record(repo, records: list[dict], record: dict) -> dict:
     if get_dataset_backend() == "file":
         records.append(record)
@@ -358,7 +397,13 @@ def fetch_zh_shuzhaige(url: str) -> str:
         return ""
 
 
-def extract_new_terms(ko_text: str, zh_text: str) -> List[str]:
+def extract_new_terms(
+    ko_text: str,
+    zh_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> List[str]:
     """기존 glossary에 없는 한자 용어 후보 추출 (규칙+LLM 혼합)"""
     glossary = load_glossary()
     existing = {term["term_zh"] for term in glossary}
@@ -383,9 +428,13 @@ def extract_new_terms(ko_text: str, zh_text: str) -> List[str]:
     ]
 
     llm_terms: List[str] = []
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key and zh_text.strip() and ko_text.strip():
-        llm_terms = extract_terms_with_llm(ko_text, zh_text, api_key)
+    if zh_text.strip() and ko_text.strip():
+        llm_terms = extract_terms_with_llm(
+            ko_text,
+            zh_text,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
 
     merged = []
     seen = set()
@@ -400,7 +449,13 @@ def extract_new_terms(ko_text: str, zh_text: str) -> List[str]:
     return merged[:30]
 
 
-def extract_terms_with_llm(ko_text: str, zh_text: str, api_key: str) -> List[str]:
+def extract_terms_with_llm(
+    ko_text: str,
+    zh_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> List[str]:
     prompt = (
         "다음 중국어 원문과 한국어 번역문에서 고유명사/무협용어/의술용어/지명/직함 위주 중국어 용어만 추려라.\n"
         "반드시 JSON 배열만 출력하라. 예: [\"赤霄剑\",\"天方圣鼎\"]\n"
@@ -408,17 +463,14 @@ def extract_terms_with_llm(ko_text: str, zh_text: str, api_key: str) -> List[str
         f"[ZH]\n{zh_text[:5000]}\n\n[KO]\n{ko_text[:5000]}"
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = anthropic_create_with_timeout(
-            client,
-            model="claude-haiku-4-5",
-            max_tokens=600,
-            messages=[{"role": "user", "content": prompt}],
+        raw = _generate_upload_llm_text(
+            prompt,
+            action="Upload glossary candidate extraction",
+            max_output_tokens=600,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
         )
-        raw = message.content[0].text.strip()
-        match = re.search(r"\[(?:.|\n)*\]", raw)
-        payload = match.group(0) if match else raw
-        parsed = json.loads(payload)
+        parsed = _parse_llm_json(raw, "array")
         if isinstance(parsed, list):
             return [str(item).strip() for item in parsed if str(item).strip()]
     except Exception:
@@ -426,10 +478,15 @@ def extract_terms_with_llm(ko_text: str, zh_text: str, api_key: str) -> List[str
     return []
 
 
-def align_parallel_segments(zh_text: str, ko_text: str) -> tuple[str, str]:
+def align_parallel_segments(
+    zh_text: str,
+    ko_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> tuple[str, str]:
     """ZH/KO 본문 앞뒤 잡음을 제거하고 겹치는 서사 구간으로 정렬."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or not zh_text.strip() or not ko_text.strip():
+    if not zh_text.strip() or not ko_text.strip():
         return zh_text, ko_text
 
     prompt = (
@@ -443,36 +500,36 @@ def align_parallel_segments(zh_text: str, ko_text: str) -> tuple[str, str]:
         f"[ZH]\n{zh_text[:7000]}\n\n[KO]\n{ko_text[:7000]}"
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = anthropic_create_with_timeout(
-            client,
-            model="claude-haiku-4-5",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
+        raw = _generate_upload_llm_text(
+            prompt,
+            action="Upload source/translation alignment cleanup",
+            max_output_tokens=1500,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
         )
-        raw = message.content[0].text.strip()
-        match = re.search(r"\{(?:.|\n)*\}", raw)
-        payload = match.group(0) if match else raw
-        data = json.loads(payload)
+        data = _parse_llm_json(raw, "object")
         aligned_zh = clean_chapter_text(str(data.get("zh_text", "")).strip(), "zh")
         aligned_ko = clean_chapter_text(str(data.get("ko_text", "")).strip(), "ko")
         if aligned_zh and aligned_ko:
             if len(aligned_zh) >= max(80, int(len(zh_text) * 0.15)) and len(aligned_ko) >= max(80, int(len(ko_text) * 0.15)):
                 return aligned_zh, aligned_ko
-    except FuturesTimeoutError:
-        return zh_text, ko_text
     except Exception:
         return zh_text, ko_text
     return zh_text, ko_text
 
 
-def split_ko_with_overflow_by_zh(zh_text: str, ko_text: str) -> tuple[str, str, str]:
+def split_ko_with_overflow_by_zh(
+    zh_text: str,
+    ko_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> tuple[str, str, str]:
     """
     KO 본문을 ZH 동일 회차 경계 기준으로
     prev/current/next 3구간으로 분리.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or not zh_text.strip() or not ko_text.strip():
+    if not zh_text.strip() or not ko_text.strip():
         return "", ko_text, ""
 
     prompt = (
@@ -487,27 +544,73 @@ def split_ko_with_overflow_by_zh(zh_text: str, ko_text: str) -> tuple[str, str, 
         f"[ZH_CHAPTER]\n{zh_text[:7000]}\n\n[KO_RAW]\n{ko_text[:7000]}"
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = anthropic_create_with_timeout(
-            client,
-            model="claude-haiku-4-5",
-            max_tokens=1800,
-            messages=[{"role": "user", "content": prompt}],
+        raw = _generate_upload_llm_text(
+            prompt,
+            action="Upload chapter boundary split",
+            max_output_tokens=1800,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
         )
-        raw = message.content[0].text.strip()
-        match = re.search(r"\{(?:.|\n)*\}", raw)
-        payload = match.group(0) if match else raw
-        data = json.loads(payload)
+        data = _parse_llm_json(raw, "object")
         prev_ko = clean_chapter_text(str(data.get("prev_ko", "")).strip(), "ko")
         current_ko = clean_chapter_text(str(data.get("current_ko", "")).strip(), "ko")
         next_ko = clean_chapter_text(str(data.get("next_ko", "")).strip(), "ko")
         if current_ko:
             return prev_ko, current_ko, next_ko
-    except FuturesTimeoutError:
-        return "", ko_text, ""
     except Exception:
         return "", ko_text, ""
     return "", ko_text, ""
+
+
+def _extract_new_terms_with_overrides(
+    ko_text: str,
+    zh_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> List[str]:
+    if requested_provider or requested_model:
+        return extract_new_terms(
+            ko_text,
+            zh_text,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
+    return extract_new_terms(ko_text, zh_text)
+
+
+def _align_parallel_segments_with_overrides(
+    zh_text: str,
+    ko_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> tuple[str, str]:
+    if requested_provider or requested_model:
+        return align_parallel_segments(
+            zh_text,
+            ko_text,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
+    return align_parallel_segments(zh_text, ko_text)
+
+
+def _split_ko_with_overrides(
+    zh_text: str,
+    ko_text: str,
+    *,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> tuple[str, str, str]:
+    if requested_provider or requested_model:
+        return split_ko_with_overflow_by_zh(
+            zh_text,
+            ko_text,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
+    return split_ko_with_overflow_by_zh(zh_text, ko_text)
 
 
 def load_dataset(
@@ -584,7 +687,7 @@ def clean_chapter_text(text: str, language: Literal["ko", "zh"]) -> str:
     return "\n".join(cleaned).strip()
 
 
-class TextUploadRequest(BaseModel):
+class TextUploadRequest(UploadLlmOptionsRequest):
     """텍스트 직접 붙여넣기용 요청 스키마"""
     book: str = ""
     book_ko: str = ""
@@ -637,6 +740,8 @@ async def upload_translation_text(req: TextUploadRequest):
         "is_original_text": req.is_original_text,
         "resegment_ko_by_zh": req.resegment_ko_by_zh,
         "script": req.script,
+        "provider": req.provider,
+        "model": req.model,
     }
     worker = threading.Thread(target=_run_upload_job, args=(job_id, payload), daemon=True)
     worker.start()
@@ -656,6 +761,8 @@ async def upload_translation(
     is_original_text: bool = Form(False),
     resegment_ko_by_zh: bool = Form(False),
     script: str = Form("unknown"), # simplified / traditional / unknown
+    provider: str = Form(""),
+    model: str = Form(""),
 ):
     """
     번역 텍스트 파일 업로드 → 원문 자동 매핑 → 데이터셋 누적
@@ -679,6 +786,8 @@ async def upload_translation(
         "is_original_text": is_original_text,
         "resegment_ko_by_zh": resegment_ko_by_zh,
         "script": script,
+        "provider": provider,
+        "model": model,
     }
     worker = threading.Thread(target=_run_upload_job, args=(job_id, payload), daemon=True)
     worker.start()
@@ -861,13 +970,22 @@ def apply_alignment_review(review_id: str, req: AlignmentReviewApplyRequest | No
         else resolution_note
     )
     if record.get("zh_text") and record.get("ko_text"):
-        aligned_zh, aligned_ko = align_parallel_segments(
+        requested_provider = req.provider.strip() or None if req is not None else None
+        requested_model = req.model.strip() or None if req is not None else None
+        aligned_zh, aligned_ko = _align_parallel_segments_with_overrides(
             record.get("zh_text", ""),
             record.get("ko_text", ""),
+            requested_provider=requested_provider,
+            requested_model=requested_model,
         )
         record["zh_text"] = clean_chapter_text(aligned_zh, "zh")
         record["ko_text"] = clean_chapter_text(aligned_ko, "ko")
-        refreshed_terms = extract_new_terms(record["ko_text"], record["zh_text"])
+        refreshed_terms = _extract_new_terms_with_overrides(
+            record["ko_text"],
+            record["zh_text"],
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
         if refreshed_terms:
             record["new_term_candidates"] = sorted(
                 set(record.get("new_term_candidates", [])).union(refreshed_terms)
@@ -895,6 +1013,8 @@ async def _process_upload(
     is_original_text: bool = False,
     resegment_ko_by_zh: bool = False,
     script: str = "unknown",
+    provider: str = "",
+    model: str = "",
 ) -> UploadResult:
     # Original-text mode is only valid when the uploaded input itself is Chinese source.
     if input_language == "ko" and is_original_text:
@@ -923,6 +1043,8 @@ async def _process_upload(
             book_ko_clean = book_legacy_clean
 
     book_display = book_ko_clean or book_zh_clean or book_legacy_clean
+    requested_provider = provider.strip() or None
+    requested_model = model.strip() or None
 
     """파일/텍스트 공통 업로드 처리 로직 (범위 화수 분할 저장 지원)"""
     def split_ko_text_by_markers(text: str, expected_count: int) -> List[str]:
@@ -1105,7 +1227,12 @@ async def _process_upload(
             zh_ref = zh_refs[i]
             if not zh_ref:
                 continue
-            prev_ko, current_ko, next_ko = split_ko_with_overflow_by_zh(zh_ref, rebalanced[i])
+            prev_ko, current_ko, next_ko = _split_ko_with_overrides(
+                zh_ref,
+                rebalanced[i],
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            )
             if prev_ko and i > 0:
                 rebalanced[i - 1] = clean_chapter_text(f"{rebalanced[i - 1]}\n{prev_ko}", "ko")
             rebalanced[i] = clean_chapter_text(current_ko, "ko") if current_ko else rebalanced[i]
@@ -1177,7 +1304,16 @@ async def _process_upload(
                 source_fetch_modes.add(chapter_source_fetch_mode)
             ko_text = chapter_text
 
-        new_terms = extract_new_terms(ko_text, zh_text) if zh_text else []
+        new_terms = (
+            _extract_new_terms_with_overrides(
+                ko_text,
+                zh_text,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            )
+            if zh_text
+            else []
+        )
         detected_script = script if script != "unknown" else detect_script(zh_text or chapter_text[:200])
         now = datetime.now(timezone.utc).isoformat()
 
@@ -1250,13 +1386,20 @@ async def _process_upload(
             if new_terms:
                 existing_record["new_term_candidates"] = sorted(existing_candidates.union(new_terms))
             if existing_record.get("zh_text") and existing_record.get("ko_text"):
-                aligned_zh, aligned_ko = align_parallel_segments(
+                aligned_zh, aligned_ko = _align_parallel_segments_with_overrides(
                     existing_record.get("zh_text", ""),
                     existing_record.get("ko_text", ""),
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
                 )
                 existing_record["zh_text"] = clean_chapter_text(aligned_zh, "zh")
                 existing_record["ko_text"] = clean_chapter_text(aligned_ko, "ko")
-                refreshed_terms = extract_new_terms(existing_record["ko_text"], existing_record["zh_text"])
+                refreshed_terms = _extract_new_terms_with_overrides(
+                    existing_record["ko_text"],
+                    existing_record["zh_text"],
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
+                )
                 if refreshed_terms:
                     existing_record["new_term_candidates"] = sorted(
                         set(existing_record.get("new_term_candidates", [])).union(refreshed_terms)
@@ -1308,10 +1451,20 @@ async def _process_upload(
                 "updated_at": now,
             }
             if record["zh_text"] and record["ko_text"]:
-                aligned_zh, aligned_ko = align_parallel_segments(record["zh_text"], record["ko_text"])
+                aligned_zh, aligned_ko = _align_parallel_segments_with_overrides(
+                    record["zh_text"],
+                    record["ko_text"],
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
+                )
                 record["zh_text"] = clean_chapter_text(aligned_zh, "zh")
                 record["ko_text"] = clean_chapter_text(aligned_ko, "ko")
-                aligned_terms = extract_new_terms(record["ko_text"], record["zh_text"])
+                aligned_terms = _extract_new_terms_with_overrides(
+                    record["ko_text"],
+                    record["zh_text"],
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
+                )
                 if aligned_terms:
                     record["new_term_candidates"] = aligned_terms
             try:
@@ -1352,8 +1505,18 @@ async def _process_upload(
         decisions = align_ko_chapters_by_zh(
             candidates,
             cleaner=clean_chapter_text,
-            splitter=split_ko_with_overflow_by_zh,
-            aligner=align_parallel_segments,
+            splitter=lambda zh_text, ko_text: _split_ko_with_overrides(
+                zh_text,
+                ko_text,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            ),
+            aligner=lambda zh_text, ko_text: _align_parallel_segments_with_overrides(
+                zh_text,
+                ko_text,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            ),
             confidence_threshold=ALIGNMENT_CONFIDENCE_THRESHOLD,
         )
         pending_review_count = sum(1 for decision in decisions if not decision.auto_applied)
@@ -1413,13 +1576,20 @@ async def _process_upload(
 
             record["ko_text"] = clean_chapter_text(decision.proposed_ko_text, "ko")
             if record.get("zh_text") and record.get("ko_text"):
-                aligned_zh, aligned_ko = align_parallel_segments(
+                aligned_zh, aligned_ko = _align_parallel_segments_with_overrides(
                     record.get("zh_text", ""),
                     record.get("ko_text", ""),
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
                 )
                 record["zh_text"] = clean_chapter_text(aligned_zh, "zh")
                 record["ko_text"] = clean_chapter_text(aligned_ko, "ko")
-                refreshed_terms = extract_new_terms(record["ko_text"], record["zh_text"])
+                refreshed_terms = _extract_new_terms_with_overrides(
+                    record["ko_text"],
+                    record["zh_text"],
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
+                )
                 if refreshed_terms:
                     record["new_term_candidates"] = sorted(
                         set(record.get("new_term_candidates", [])).union(refreshed_terms)
@@ -1532,7 +1702,7 @@ def promote_candidates(req: PromoteCandidatesRequest):
     }
 
 
-class ExtractCandidatesRequest(BaseModel):
+class ExtractCandidatesRequest(UploadLlmOptionsRequest):
     record_id: str = ""
     record_ids: List[str] = []
     book: str = ""
@@ -1558,6 +1728,8 @@ def _extract_candidates_sync(req: ExtractCandidatesRequest) -> dict:
 
     updated = 0
     total_candidates = 0
+    requested_provider = req.provider.strip() or None
+    requested_model = req.model.strip() or None
     target_ids = {r.get("id") for r in targets}
     for idx, record in enumerate(records):
         if record.get("id") not in target_ids:
@@ -1565,10 +1737,20 @@ def _extract_candidates_sync(req: ExtractCandidatesRequest) -> dict:
         zh_text = clean_chapter_text(record.get("zh_text", ""), "zh")
         ko_text = clean_chapter_text(record.get("ko_text", ""), "ko")
         if zh_text and ko_text:
-            zh_text, ko_text = align_parallel_segments(zh_text, ko_text)
+            zh_text, ko_text = _align_parallel_segments_with_overrides(
+                zh_text,
+                ko_text,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            )
             records[idx]["zh_text"] = clean_chapter_text(zh_text, "zh")
             records[idx]["ko_text"] = clean_chapter_text(ko_text, "ko")
-        new_terms = extract_new_terms(ko_text, zh_text)
+        new_terms = _extract_new_terms_with_overrides(
+            ko_text,
+            zh_text,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+        )
         records[idx]["new_term_candidates"] = new_terms
         records[idx]["updated_at"] = utc_now_iso()
         try:

@@ -1,5 +1,5 @@
 """
-Translate router - 번역 에이전트 (Claude API)
+Translate router - provider-selectable translation endpoints.
 - 문화적 배경 판단 (동북공정 민감 항목 포함)
 - 주석 자동 생성 (한자어, 사자성어, 시/시구, 문화 용어)
 - 판단 불가 시 사용자에게 위임
@@ -8,9 +8,7 @@ Translate router - 번역 에이전트 (Claude API)
 from typing import Optional, List
 import json
 import os
-import asyncio
 import re
-import anthropic
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -30,68 +28,28 @@ from backend.storage.translation_memory import (
     build_prompt_glossary_table,
     build_prompt_reference_examples,
     build_reference_examples,
+    resolve_previous_record_id,
 )
+from backend.llm import generate_text, normalize_provider, provider_is_configured
 
 router = APIRouter()
-ANTHROPIC_TIMEOUT_SECONDS = int(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "180"))
-
-
-async def anthropic_create_with_timeout(client: anthropic.Anthropic, **kwargs):
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(client.messages.create, **kwargs),
-            timeout=ANTHROPIC_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Anthropic request timed out")
 
 STYLE_GUIDE_PATH = get_style_guide_path()
 
 
-def anthropic_error_message(exc: Exception) -> str:
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        error = body.get("error")
-        if isinstance(error, dict) and error.get("message"):
-            return str(error["message"])
-        if body.get("message"):
-            return str(body["message"])
-    message = getattr(exc, "message", None)
-    return str(message or exc)
+class LlmOptionsRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
-def raise_anthropic_api_error(exc: Exception, action: str) -> None:
-    if isinstance(exc, HTTPException):
-        raise exc
-
-    try:
-        status_code = int(getattr(exc, "status_code", 0) or getattr(exc, "status", 0) or 0)
-    except (TypeError, ValueError):
-        status_code = 0
-    message = anthropic_error_message(exc)
-    lower_message = message.lower()
-
-    if "usage limit" in lower_message or "usage limits" in lower_message:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Anthropic API usage limit reached. {message}",
-        )
-    if status_code == 429 or "rate limit" in lower_message:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Anthropic API rate limit reached. {message}",
-        )
-    if status_code in {400, 401, 403}:
-        raise HTTPException(status_code=status_code, detail=f"{action} API call failed: {message}")
-    raise HTTPException(status_code=502, detail=f"{action} API call failed: {message}")
-
-
-class TranslateRequest(BaseModel):
+class TranslateRequest(LlmOptionsRequest):
     text: str
     book: Optional[str] = None
     genre: List[str] = Field(default_factory=list)
     era_profile: str = "ancient"
     prev_chapter_id: Optional[str] = None
+    current_chapter_ko: Optional[int] = None
+    current_chapter_zh: Optional[str] = None
     with_annotations: bool = True   # 주석 생성 여부
     with_cultural_check: bool = True # 문화 판단 여부
 
@@ -148,15 +106,16 @@ class TranslateResponse(BaseModel):
     glossary_hits: List[GlossaryHit]
     reference_examples: List[ReferenceExample]
     context_summary: TranslationContextSummary
+    provider: str
     model: str
 
 
-class SyntaxAlignRequest(BaseModel):
+class SyntaxAlignRequest(LlmOptionsRequest):
     source_text: str
     translation_text: str
 
 
-class SentenceExplainRequest(BaseModel):
+class SentenceExplainRequest(LlmOptionsRequest):
     source_text: str
     translation_text: str = ""
     book: Optional[str] = None
@@ -166,10 +125,11 @@ class SentenceExplainRequest(BaseModel):
 
 class SentenceExplainResponse(BaseModel):
     explanation: str
+    provider: str
     model: str
 
 
-class ToneRewriteRequest(BaseModel):
+class ToneRewriteRequest(LlmOptionsRequest):
     source_text: str = ""
     translation_text: str
     target_tone: str = "haoche"
@@ -180,10 +140,11 @@ class ToneRewriteRequest(BaseModel):
 
 class ToneRewriteResponse(BaseModel):
     rewritten: str
+    provider: str
     model: str
 
 
-class DraftVerifyRequest(BaseModel):
+class DraftVerifyRequest(LlmOptionsRequest):
     source_text: str
     translation_text: str
     book: Optional[str] = None
@@ -215,7 +176,12 @@ class DraftVerifyResponse(BaseModel):
     categories: List[DraftVerifyCategory]
     issues: List[DraftVerifyIssue]
     strengths: List[str] = Field(default_factory=list)
+    provider: str = "anthropic"
     model: str
+
+
+class TranslateTestRequest(LlmOptionsRequest):
+    prompt: str = "안녕이라고 짧게 대답해"
 
 
 class SyntaxAlignPair(BaseModel):
@@ -230,6 +196,7 @@ class SyntaxAlignPair(BaseModel):
 
 class SyntaxAlignResponse(BaseModel):
     pairs: List[SyntaxAlignPair]
+    provider: str = "local"
     model: str
 
 
@@ -739,18 +706,20 @@ def load_translation_memory_context(
     book: Optional[str],
     source_text: str,
     prev_chapter_id: Optional[str],
-) -> tuple[list[dict], list[dict], int]:
+    current_chapter_ko: Optional[int] = None,
+    current_chapter_zh: Optional[str] = None,
+) -> tuple[list[dict], list[dict], int, str | None]:
     glossary_terms = load_glossary_filtered(book)
 
     if not book:
         glossary_hits = build_glossary_hits(glossary_terms, source_text, book=book)
-        return glossary_hits, [], 0
+        return glossary_hits, [], 0, prev_chapter_id or None
 
     try:
         records = get_dataset_repository().list_records(book_exact=book, status="confirmed")
     except (DatasetBackendUnavailableError, Exception):
         glossary_hits = build_glossary_hits(glossary_terms, source_text, book=book)
-        return glossary_hits, [], 0
+        return glossary_hits, [], 0, prev_chapter_id or None
 
     glossary_hits = build_glossary_hits(glossary_terms, source_text, book=book)
     confirmed_records = [
@@ -759,14 +728,20 @@ def load_translation_memory_context(
         if str(record.get("zh_text", "")).strip()
         and str(record.get("ko_text_confirmed") or record.get("ko_text") or "").strip()
     ]
+    resolved_prev_record_id = resolve_previous_record_id(
+        confirmed_records,
+        current_chapter_ko=current_chapter_ko,
+        current_chapter_zh=current_chapter_zh,
+        fallback_prev_record_id=prev_chapter_id or None,
+    )
     examples = build_reference_examples(
-        records,
+        confirmed_records,
         source_text,
         glossary_hits,
-        prev_record_id=prev_chapter_id or None,
+        prev_record_id=resolved_prev_record_id,
         limit=5,
     )
-    return glossary_hits, examples, len(confirmed_records)
+    return glossary_hits, examples, len(confirmed_records), resolved_prev_record_id
 
 
 def build_system_prompt(
@@ -1018,7 +993,13 @@ def _remove_false_dash_verify_findings(
     return response
 
 
-def normalize_draft_verify_response(parsed: dict, *, model: str, translation_text: str) -> DraftVerifyResponse:
+def normalize_draft_verify_response(
+    parsed: dict,
+    *,
+    provider: str,
+    model: str,
+    translation_text: str,
+) -> DraftVerifyResponse:
     categories_by_id: dict[str, DraftVerifyCategory] = {}
     for raw in parsed.get("categories", []):
         if not isinstance(raw, dict):
@@ -1094,6 +1075,7 @@ def normalize_draft_verify_response(parsed: dict, *, model: str, translation_tex
         categories=categories,
         issues=issues,
         strengths=strengths,
+        provider=provider,
         model=model,
     )
     return _remove_false_dash_verify_findings(response, translation_text=translation_text)
@@ -1527,68 +1509,70 @@ def _normalize_sentence_alignment_rows(
 
 
 async def _request_syntax_alignment(
-    client: anthropic.Anthropic,
+    provider: Optional[str],
+    model: Optional[str],
     source_segments: list[str],
     translation_segments: list[str],
     local_pairs: list[SyntaxAlignPair],
 ) -> SyntaxAlignResponse:
     prompt = _build_syntax_alignment_prompt(source_segments, translation_segments)
     try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_SYNTAX_ALIGN_MODEL", "claude-sonnet-4-5"),
-            max_tokens=int(os.getenv("ANTHROPIC_SYNTAX_ALIGN_MAX_TOKENS", "8192")),
+        response = await generate_text(
+            task="syntax_align",
+            action="Syntax alignment",
+            requested_provider=provider,
+            requested_model=model,
+            user_prompt=prompt,
+            max_output_tokens=int(os.getenv("ANTHROPIC_SYNTAX_ALIGN_MAX_TOKENS", "8192")),
             temperature=0,
-            messages=[{"role": "user", "content": prompt}],
         )
-    except anthropic.AuthenticationError:
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:auth-error")
     except Exception as exc:
         print(f"[syntax_align] API call failed, using local fallback: {exc}")
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:api-error")
+        return SyntaxAlignResponse(pairs=local_pairs, provider="local", model="local-fallback:api-error")
 
     try:
-        parsed = parse_json_object(message.content[0].text)
+        parsed = parse_json_object(response.text)
         pairs = _normalize_syntax_alignment_pairs(parsed, source_segments, translation_segments)
     except Exception as exc:
         print(f"[syntax_align] Result processing failed, using local fallback: {exc}")
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:result-error")
+        return SyntaxAlignResponse(pairs=local_pairs, provider="local", model="local-fallback:result-error")
 
     if not pairs:
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:empty-ai-result")
+        return SyntaxAlignResponse(pairs=local_pairs, provider="local", model="local-fallback:empty-ai-result")
 
     if _ai_pairs_need_heading_fallback(pairs):
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:heading-repair")
+        return SyntaxAlignResponse(pairs=local_pairs, provider="local", model="local-fallback:heading-repair")
 
-    return SyntaxAlignResponse(pairs=pairs, model=str(message.model or "unknown"))
+    return SyntaxAlignResponse(pairs=pairs, provider=response.provider, model=response.model)
 
 
 async def _request_sentence_alignment(
-    client: anthropic.Anthropic,
+    provider: Optional[str],
+    model: Optional[str],
     source_sentences: list[str],
     translation_sentences: list[str],
     local_sentence_pairs: list[SyntaxAlignPair],
-) -> tuple[list[SyntaxAlignPair], str]:
+) -> tuple[list[SyntaxAlignPair], str, str]:
     if not source_sentences and not translation_sentences:
-        return local_sentence_pairs, "local-fallback:no-sentences"
+        return local_sentence_pairs, "local", "local-fallback:no-sentences"
 
     prompt = _build_sentence_alignment_prompt(source_sentences, translation_sentences)
     try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_SENTENCE_ALIGN_MODEL", "claude-sonnet-4-5"),
-            max_tokens=int(os.getenv("ANTHROPIC_SENTENCE_ALIGN_MAX_TOKENS", "8192")),
+        response = await generate_text(
+            task="sentence_align",
+            action="Sentence alignment",
+            requested_provider=provider,
+            requested_model=model,
+            user_prompt=prompt,
+            max_output_tokens=int(os.getenv("ANTHROPIC_SENTENCE_ALIGN_MAX_TOKENS", "8192")),
             temperature=0,
-            messages=[{"role": "user", "content": prompt}],
         )
-    except anthropic.AuthenticationError:
-        return local_sentence_pairs, "local-fallback:auth-error"
     except Exception as exc:
         print(f"[sentence_align] API call failed, using local fallback: {exc}")
-        return local_sentence_pairs, "local-fallback:api-error"
+        return local_sentence_pairs, "local", "local-fallback:api-error"
 
     try:
-        parsed = parse_json_object(message.content[0].text)
+        parsed = parse_json_object(response.text)
         rows = _normalize_sentence_alignment_rows(
             parsed,
             source_sentences,
@@ -1596,18 +1580,19 @@ async def _request_sentence_alignment(
         )
     except Exception as exc:
         print(f"[sentence_align] Result processing failed, using local fallback: {exc}")
-        return local_sentence_pairs, "local-fallback:result-error"
+        return local_sentence_pairs, "local", "local-fallback:result-error"
 
     if not rows:
-        return local_sentence_pairs, "local-fallback:empty-sentence-result"
+        return local_sentence_pairs, "local", "local-fallback:empty-sentence-result"
     if _ai_pairs_need_heading_fallback(rows):
-        return local_sentence_pairs, "local-fallback:heading-repair"
+        return local_sentence_pairs, "local", "local-fallback:heading-repair"
 
-    return rows, str(message.model or "unknown")
+    return rows, response.provider, response.model
 
 
 async def _request_sentence_locked_syntax_alignment(
-    client: anthropic.Anthropic,
+    provider: Optional[str],
+    model: Optional[str],
     source_text: str,
     translation_text: str,
     local_sentence_pairs: list[SyntaxAlignPair],
@@ -1618,10 +1603,12 @@ async def _request_sentence_locked_syntax_alignment(
 
     if len(source_text) + len(translation_text) > sentence_align_max_chars:
         sentence_pairs = local_sentence_pairs
-        model = "local-fallback:sentence-align-too-large"
+        resolved_provider = "local"
+        resolved_model = "local-fallback:sentence-align-too-large"
     else:
-        sentence_pairs, model = await _request_sentence_alignment(
-            client,
+        sentence_pairs, resolved_provider, resolved_model = await _request_sentence_alignment(
+            provider,
+            model,
             source_sentences,
             translation_sentences,
             local_sentence_pairs,
@@ -1629,7 +1616,8 @@ async def _request_sentence_locked_syntax_alignment(
 
     return SyntaxAlignResponse(
         pairs=_expand_sentence_pairs_to_syntax_pairs(sentence_pairs),
-        model=f"{model}+sentence-locked",
+        provider=resolved_provider,
+        model=f"{resolved_model}+sentence-locked",
     )
 
 
@@ -1738,7 +1726,8 @@ def _summarize_syntax_alignment_models(models: list[str]) -> str:
 
 
 async def _request_chunked_syntax_alignment(
-    client: anthropic.Anthropic,
+    provider: Optional[str],
+    model: Optional[str],
     source_text: str,
     translation_text: str,
     chunk_chars: int,
@@ -1758,7 +1747,8 @@ async def _request_chunked_syntax_alignment(
         source_segments = _split_alignment_phrases(source_chunk_text, source=True)
         translation_segments = _split_alignment_phrases(translation_chunk_text, source=False)
         response = await _request_syntax_alignment(
-            client,
+            provider,
+            model,
             source_segments,
             translation_segments,
             local_pairs,
@@ -1768,6 +1758,7 @@ async def _request_chunked_syntax_alignment(
 
     return SyntaxAlignResponse(
         pairs=combined_pairs,
+        provider="mixed",
         model=_summarize_syntax_alignment_models(models),
     )
 
@@ -1775,18 +1766,16 @@ async def _request_chunked_syntax_alignment(
 @router.post("/", response_model=TranslateResponse)
 async def translate(req: TranslateRequest):
     """중국어 원문 → 한국어 번역 (문화 판단 + 주석 포함)"""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 없음")
-
-    glossary_hits, reference_examples, confirmed_record_count = load_translation_memory_context(
+    glossary_hits, reference_examples, confirmed_record_count, resolved_prev_record_id = load_translation_memory_context(
         book=req.book,
         source_text=req.text,
         prev_chapter_id=req.prev_chapter_id,
+        current_chapter_ko=req.current_chapter_ko,
+        current_chapter_zh=req.current_chapter_zh,
     )
     glossary_text = build_prompt_glossary_table(glossary_hits)
     style_guide_text = load_style_guide_filtered()
-    prev_sample = load_prev_chapter_sample(req.prev_chapter_id or "")
+    prev_sample = load_prev_chapter_sample(resolved_prev_record_id or "")
     reference_examples_text = build_prompt_reference_examples(reference_examples)
 
     system_prompt = build_system_prompt(
@@ -1800,23 +1789,16 @@ async def translate(req: TranslateRequest):
         with_cultural_check=req.with_cultural_check,
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
-    try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_TRANSLATE_MODEL", "claude-opus-4-5"),
-            max_tokens=int(os.getenv("ANTHROPIC_TRANSLATE_MAX_TOKENS", "8192")),
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"다음 원문을 번역하세요:\n\n{req.text}"}]
-        )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Anthropic API key invalid")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_anthropic_api_error(exc, "Translate")
-
-    raw = message.content[0].text
+    response = await generate_text(
+        task="translate",
+        action="Translate",
+        requested_provider=req.provider,
+        requested_model=req.model,
+        system_prompt=system_prompt,
+        user_prompt=f"다음 원문을 번역하세요:\n\n{req.text}",
+        max_output_tokens=int(os.getenv("ANTHROPIC_TRANSLATE_MAX_TOKENS", "8192")),
+    )
+    raw = response.text
 
     # 파싱
     annotations_raw = parse_json_block(raw, "annotations")
@@ -1853,7 +1835,8 @@ async def translate(req: TranslateRequest):
             glossary_hits=len(glossary_hits),
             reference_examples=len(reference_examples),
         ),
-        model=message.model
+        provider=response.provider,
+        model=response.model,
     )
 
 
@@ -1865,11 +1848,7 @@ async def explain_sentence(req: SentenceExplainRequest):
     if not source_text:
         raise HTTPException(status_code=400, detail="source_text는 필수입니다.")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 없음")
-
-    glossary_hits, reference_examples, _ = load_translation_memory_context(
+    glossary_hits, reference_examples, _, _ = load_translation_memory_context(
         book=req.book,
         source_text=source_text,
         prev_chapter_id=None,
@@ -1905,26 +1884,20 @@ async def explain_sentence(req: SentenceExplainRequest):
 {reference_examples_text}
 """
 
-    client = anthropic.Anthropic(api_key=api_key)
-    try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_EXPLAIN_MODEL", "claude-sonnet-4-5"),
-            max_tokens=int(os.getenv("ANTHROPIC_EXPLAIN_MAX_TOKENS", "900")),
-            temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Anthropic API key invalid")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_anthropic_api_error(exc, "Explain")
-
-    explanation = str(message.content[0].text or "").strip()
+    response = await generate_text(
+        task="explain",
+        action="Explain",
+        requested_provider=req.provider,
+        requested_model=req.model,
+        user_prompt=prompt,
+        max_output_tokens=int(os.getenv("ANTHROPIC_EXPLAIN_MAX_TOKENS", "900")),
+        temperature=0,
+    )
+    explanation = str(response.text or "").strip()
     return SentenceExplainResponse(
         explanation=explanation,
-        model=str(message.model or "unknown"),
+        provider=response.provider,
+        model=response.model,
     )
 
 
@@ -1944,14 +1917,10 @@ async def rewrite_tone(req: ToneRewriteRequest):
     if not translation_text:
         raise HTTPException(status_code=400, detail="translation_text는 필수입니다.")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 없음")
-
     target_tone = req.target_tone.strip() or "haoche"
     tone_description = TONE_PRESET_DESCRIPTIONS.get(target_tone, target_tone)
     genre_str = "/".join(req.genre or []) if req.genre else "고장극"
-    glossary_hits, reference_examples, _ = load_translation_memory_context(
+    glossary_hits, reference_examples, _, _ = load_translation_memory_context(
         book=req.book,
         source_text=req.source_text or translation_text,
         prev_chapter_id=None,
@@ -1984,26 +1953,21 @@ async def rewrite_tone(req: ToneRewriteRequest):
 {reference_examples_text}
 """
 
-    client = anthropic.Anthropic(api_key=api_key)
-    try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_TONE_MODEL", os.getenv("ANTHROPIC_EXPLAIN_MODEL", "claude-sonnet-4-5")),
-            max_tokens=int(os.getenv("ANTHROPIC_TONE_MAX_TOKENS", "900")),
-            temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Anthropic API key invalid")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_anthropic_api_error(exc, "Tone rewrite")
+    response = await generate_text(
+        task="tone",
+        action="Tone rewrite",
+        requested_provider=req.provider,
+        requested_model=req.model,
+        user_prompt=prompt,
+        max_output_tokens=int(os.getenv("ANTHROPIC_TONE_MAX_TOKENS", "900")),
+        temperature=0,
+    )
 
-    rewritten = sanitize_korean_translation_punctuation(str(message.content[0].text or "").strip())
+    rewritten = sanitize_korean_translation_punctuation(str(response.text or "").strip())
     return ToneRewriteResponse(
         rewritten=rewritten,
-        model=str(message.model or "unknown"),
+        provider=response.provider,
+        model=response.model,
     )
 
 
@@ -2025,11 +1989,7 @@ async def verify_draft(req: DraftVerifyRequest):
             ),
         )
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 없음")
-
-    glossary_hits, reference_examples, _ = load_translation_memory_context(
+    glossary_hits, reference_examples, _, _ = load_translation_memory_context(
         book=req.book,
         source_text=source_text,
         prev_chapter_id=None,
@@ -2045,23 +2005,17 @@ async def verify_draft(req: DraftVerifyRequest):
         reference_examples_text=build_prompt_reference_examples(reference_examples[:5]),
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
-    try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model=os.getenv("ANTHROPIC_VERIFY_MODEL", os.getenv("ANTHROPIC_EXPLAIN_MODEL", "claude-sonnet-4-5")),
-            max_tokens=int(os.getenv("ANTHROPIC_VERIFY_MAX_TOKENS", "3500")),
-            temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Anthropic API key invalid")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_anthropic_api_error(exc, "Draft verification")
+    response = await generate_text(
+        task="verify",
+        action="Draft verification",
+        requested_provider=req.provider,
+        requested_model=req.model,
+        user_prompt=prompt,
+        max_output_tokens=int(os.getenv("ANTHROPIC_VERIFY_MAX_TOKENS", "3500")),
+        temperature=0,
+    )
 
-    raw = str(message.content[0].text or "").strip()
+    raw = str(response.text or "").strip()
     try:
         parsed = parse_json_object(raw)
     except Exception as exc:
@@ -2071,7 +2025,8 @@ async def verify_draft(req: DraftVerifyRequest):
         ) from exc
     return normalize_draft_verify_response(
         parsed,
-        model=str(message.model or "unknown"),
+        provider=response.provider,
+        model=response.model,
         translation_text=translation_text,
     )
 
@@ -2089,13 +2044,17 @@ async def syntax_align(req: SyntaxAlignRequest):
     if not local_pairs:
         raise HTTPException(status_code=400, detail="정렬할 문장을 찾을 수 없습니다.")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return SyntaxAlignResponse(pairs=local_pairs, model="local-fallback:no-api-key")
+    provider = normalize_provider(req.provider)
+    if not provider_is_configured(provider):
+        return SyntaxAlignResponse(
+            pairs=local_pairs,
+            provider="local",
+            model="local-fallback:no-api-key",
+        )
 
-    client = anthropic.Anthropic(api_key=api_key)
     return await _request_sentence_locked_syntax_alignment(
-        client,
+        req.provider,
+        req.model,
         source_text,
         translation_text,
         sentence_pairs,
@@ -2103,21 +2062,22 @@ async def syntax_align(req: SyntaxAlignRequest):
 
 
 @router.post("/test")
-async def translate_test():
+async def translate_test(req: Optional[TranslateTestRequest] = None):
     """API 연결 테스트용"""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 없음")
-    client = anthropic.Anthropic(api_key=api_key)
     try:
-        message = await anthropic_create_with_timeout(
-            client,
-            model="claude-haiku-4-5",
-            max_tokens=50,
-            messages=[{"role": "user", "content": "안녕이라고 짧게 대답해"}]
+        response = await generate_text(
+            task="test",
+            action="Translate test",
+            requested_provider=req.provider if req else None,
+            requested_model=req.model if req else None,
+            user_prompt=(req.prompt if req else "") or "안녕이라고 짧게 대답해",
+            max_output_tokens=50,
         )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Anthropic API key invalid")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Translate test failed: {exc}")
-    return {"ok": True, "response": message.content[0].text}
+    return {
+        "ok": True,
+        "provider": response.provider,
+        "model": response.model,
+        "response": response.text,
+    }

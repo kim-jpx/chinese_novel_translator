@@ -6,6 +6,8 @@ import re
 from itertools import zip_longest
 from typing import Any
 
+from backend.storage.dataset_utils import chapter_zh_primary_value
+
 
 def _confirmed_ko_text(record: dict[str, Any]) -> str:
     return str(record.get("ko_text_confirmed") or record.get("ko_text") or "").strip()
@@ -232,6 +234,80 @@ def _record_excerpt(record: dict[str, Any], matched_terms: list[str]) -> tuple[s
     ko_text = _confirmed_ko_text(record)
     focus_term = matched_terms[0] if matched_terms else ""
     return _excerpt(zh_text, center_term=focus_term), _excerpt(ko_text, max_chars=220)
+
+
+def resolve_previous_record_id(
+    records: list[dict[str, Any]],
+    *,
+    current_chapter_ko: int | None = None,
+    current_chapter_zh: str | None = None,
+    fallback_prev_record_id: str | None = None,
+) -> str | None:
+    confirmed = get_confirmed_records(records)
+    if not confirmed:
+        return fallback_prev_record_id or None
+
+    normalized_current_ko = current_chapter_ko if isinstance(current_chapter_ko, int) and current_chapter_ko > 0 else None
+    normalized_current_zh = chapter_zh_primary_value(str(current_chapter_zh or "").strip(), 0)
+    has_current_chapter = normalized_current_ko is not None or normalized_current_zh > 0
+
+    def record_id(record: dict[str, Any]) -> str:
+        return str(record.get("id", "") or "").strip()
+
+    def record_chapter_ko(record: dict[str, Any]) -> int:
+        return int(record.get("chapter_ko", 0) or 0)
+
+    def record_chapter_zh(record: dict[str, Any]) -> int:
+        return chapter_zh_primary_value(
+            str(record.get("chapter_zh", "") or "").strip(),
+            record_chapter_ko(record),
+        )
+
+    if normalized_current_ko is not None:
+        ko_candidates = [
+            record
+            for record in confirmed
+            if record_chapter_ko(record) < normalized_current_ko
+        ]
+        if ko_candidates:
+            return record_id(
+                max(
+                    ko_candidates,
+                    key=lambda record: (
+                        record_chapter_ko(record),
+                        record_chapter_zh(record),
+                        record_id(record),
+                    ),
+                )
+            )
+
+    if normalized_current_zh > 0:
+        zh_candidates = [
+            record
+            for record in confirmed
+            if record_chapter_zh(record) < normalized_current_zh
+        ]
+        if zh_candidates:
+            return record_id(
+                max(
+                    zh_candidates,
+                    key=lambda record: (
+                        record_chapter_zh(record),
+                        record_chapter_ko(record),
+                        record_id(record),
+                    ),
+                )
+            )
+
+    if has_current_chapter:
+        return None
+
+    if fallback_prev_record_id:
+        fallback = next((record for record in confirmed if record_id(record) == fallback_prev_record_id), None)
+        if fallback:
+            return record_id(fallback)
+
+    return None
 
 
 def build_reference_examples(
